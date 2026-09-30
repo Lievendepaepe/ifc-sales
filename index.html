@@ -150,22 +150,29 @@ function runStatus(msg) { $("runStatus").textContent = msg || ""; }
 function onEvent(event, data) {
   if (event === "extension.accessToken") {
     const t = data && typeof data === "object" ? data.data : data;
-    if (t && t !== "pending" && t !== "denied") { S.token = t; tokenWaiters.forEach((f) => f(t)); tokenWaiters = []; }
+    if (isJwt(t)) { S.token = t; tokenWaiters.forEach((f) => f(t)); tokenWaiters = []; }
   }
 }
 async function init() {
   renderProject(); renderCalib();
   if (window.parent === window) { status("Niet geladen in Trimble Connect. Open deze pagina als extensie in de 3D-viewer.", "warn"); return; }
-  try { S.api = await TrimbleConnectWorkspace.connect(window.parent, onEvent, 30000); status("Verbonden met Trimble Connect.", "ok"); }
+  try { S.api = await TrimbleConnectWorkspace.connect(window.parent, onEvent, 30000); status("Verbonden met Trimble Connect.", "ok"); getToken().catch(() => { /* bij downloaden opnieuw */ }); }
   catch (e) { status("Verbinding met Trimble Connect mislukt: " + errMsg(e), "err"); }
 }
-async function getToken() {
-  if (S.token) return S.token;
-  const r = await S.api.extension.requestPermission("accesstoken");
-  if (r === "denied") throw new Error("Toegang tot je Trimble-sessie geweigerd.");
-  if (r && r !== "pending") { S.token = r; return r; }
+// Een geldige token is een JWT (drie delen gescheiden door punten). "granted" of "pending" is dat niet: dan komt de token via een event.
+const isJwt = (t) => typeof t === "string" && t.split(".").length === 3 && t.length > 100;
+async function getToken(force) {
+  if (S.token && !force) return S.token;
+  if (force) S.token = null;
+  const ask = async () => { const r = await S.api.extension.requestPermission("accesstoken"); if (r === "denied") throw new Error("Toegang tot je Trimble-sessie geweigerd."); return r; };
+  const r = await ask(); if (isJwt(r)) { S.token = r; return r; }
   status("Bevestig in Trimble Connect dat de extensie je sessie mag gebruiken…", "warn");
-  return new Promise((res, rej) => { tokenWaiters.push(res); setTimeout(() => rej(new Error("Geen toestemming ontvangen binnen 60 seconden.")), 60000); });
+  return new Promise((res, rej) => {
+    let done = false; const finish = (t) => { if (done) return; done = true; clearInterval(poll); S.token = t; status("Verbonden met Trimble Connect.", "ok"); res(t); };
+    tokenWaiters.push(finish);
+    const poll = setInterval(async () => { try { const t = await ask(); if (isJwt(t)) finish(t); } catch (e) { /* */ } }, 2000);
+    setTimeout(() => { if (!done) { done = true; clearInterval(poll); rej(new Error("Geen toegang tot je Trimble-sessie ontvangen binnen 60 seconden.")); } }, 60000);
+  });
 }
 function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("Kan " + src + " niet laden.")); document.head.appendChild(s); }); }
 async function ensureWebIfc() {
@@ -187,13 +194,17 @@ async function fetchIfcBytes(m) {
   if (!file || !file.name) file = { id: m.id, versionId: m.versionId, name: m.name };
   const fileId = file.id || m.id, versionId = file.versionId, name = file.name || m.name || "model.ifc";
   if (/\.ifczip$/i.test(name)) throw new Error("IFCZIP wordt niet ondersteund: " + name);
-  const token = await getToken(); let url = null, lastErr = "";
-  for (const host of TC_HOSTS) {
-    try { const r = await fetch(`${host}/tc/api/2.0/files/fs/${fileId}/downloadurl${versionId ? `?versionId=${encodeURIComponent(versionId)}` : ""}`, { headers: { Authorization: `Bearer ${token}` } });
-      if (!r.ok) { lastErr = `${host}: HTTP ${r.status}`; continue; } const j = await r.json(); url = j.url || j.downloadUrl; if (url) break; }
-    catch (e) { lastErr = `${host}: ${errMsg(e)}`; }
+  let url = null, errs = [];
+  for (let attempt = 0; attempt < 2 && !url; attempt++) {
+    const token = await getToken(attempt > 0); errs = [];
+    for (const host of TC_HOSTS) {
+      try { const r = await fetch(`${host}/tc/api/2.0/files/fs/${fileId}/downloadurl${versionId ? `?versionId=${encodeURIComponent(versionId)}` : ""}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!r.ok) { errs.push(`${host.replace("https://", "")}: ${r.status}`); continue; } const j = await r.json(); url = j.url || j.downloadUrl; if (url) break; }
+      catch (e) { errs.push(`${host.replace("https://", "")}: ${errMsg(e)}`); }
+    }
+    if (!url && !errs.every((e) => / 401$/.test(e))) break; // enkel bij 401 overal een nieuwe token vragen
   }
-  if (!url) throw new Error("Downloadlink niet gekregen voor " + name + " (" + lastErr + ").");
+  if (!url) throw new Error(`Downloadlink niet gekregen voor ${name} (${errs.join("; ")}).` + (errs.every((e) => / 401$/.test(e)) ? " Trimble weigert de token: herlaad de 3D-viewer en bevestig de toegang van de extensie." : ""));
   const resp = await fetch(url); if (!resp.ok) throw new Error(`Download mislukt voor ${name} (HTTP ${resp.status}).`);
   return { bytes: new Uint8Array(await resp.arrayBuffer()), name, versionId };
 }
