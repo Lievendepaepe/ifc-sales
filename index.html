@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IFC sales berekening</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#FFFFFF; --panel:#F3F5F7; --ink:#1C2630; --muted:#5B6875; --line:#D5DBE1;
+    --steel:#2F5D7C; --steel-ink:#FFFFFF; --ok:#2E8B3A; --nok:#D0342C; --warn:#A86A00;
+    --sans:"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono:"IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans)}
+  main{padding:12px 14px 40px;max-width:900px}
+  h1{font-size:17px;margin:0 0 2px}
+  h2{font-size:15px;margin:0 0 6px;display:flex;gap:8px;align-items:baseline}
+  h2 .n{color:var(--steel);font-family:var(--mono)}
+  h3{font-size:13px;margin:12px 0 4px}
+  .muted{color:var(--muted);font-size:13px}
+  .meta{font-size:12.5px;color:var(--muted)}
+  section{border-top:1px solid var(--line);padding:14px 0}
+  #status{font-size:12px;margin:8px 0;padding:6px 8px;border-radius:4px;background:var(--panel)}
+  #status.ok{color:var(--ok)} #status.warn{color:var(--warn)} #status.err{color:var(--nok)}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:6px 0}
+  label{font-size:13px}
+  input[type=text],input[type=number],select{font:13px var(--sans);padding:5px 6px;border:1px solid var(--line);border-radius:4px;background:#fff;color:var(--ink);min-width:0}
+  input[type=number]{width:96px;font-family:var(--mono)}
+  button{font:500 13px var(--sans);padding:6px 10px;border-radius:4px;border:1px solid var(--line);background:#fff;color:var(--ink);cursor:pointer}
+  button.primary{background:var(--steel);border-color:var(--steel);color:var(--steel-ink)}
+  button:disabled{opacity:.5;cursor:default}
+  button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--steel);outline-offset:1px}
+  .err-box{color:var(--nok);font-size:13px;margin:6px 0;display:none}
+  .warn-box{color:var(--warn);font-size:12.5px;margin:4px 0}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  .scroll{overflow-x:auto}
+  th{text-align:right;font-weight:500;color:var(--muted);padding:4px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{text-align:right;padding:4px;font-family:var(--mono);border-bottom:1px solid var(--line);white-space:nowrap}
+  th:first-child,td:first-child{text-align:left;font-family:var(--sans)}
+  td.l,th.l{text-align:left;font-family:var(--sans);white-space:normal}
+  tr.tot td{font-weight:600}
+  .big{font:600 20px var(--mono)}
+  .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:8px 0}
+  .kpis div{background:var(--panel);border-radius:4px;padding:8px}
+  .kpis span{display:block;font-size:12px;color:var(--muted)}
+  details summary{cursor:pointer;font-size:13px;color:var(--steel);margin:6px 0}
+  .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+  .empty{background:var(--panel);padding:10px;border-radius:4px;font-size:13px;color:var(--muted)}
+</style>
+</head>
+<body>
+<main>
+  <h1>IFC sales berekening</h1>
+  <div class="muted">Zichten, dwarsschotten, langsschotten en monotekeningen per IFC of per moot, met een schatting van samensteltekeningen en uren die bijleert uit de nacalculatie.</div>
+  <div id="status">Verbinden…</div>
+
+  <section>
+    <h2><span class="n">1</span>Omvang</h2>
+    <p class="muted">Zet in Trimble de oogjes aan bij de IFC's die meetellen. Verberg wat niet meetelt, of knip met doorsnedevlakken (geen doorsnedebox). Onderdelen tellen volledig mee aan de kant van hun zwaartepunt: zet de vlakken dus op de voeg tussen twee moten.</p>
+    <div class="row">
+      <label>Omvang <select id="scope">
+        <option value="vis">Zichtbaar in de viewer, binnen de doorsnedevlakken</option>
+        <option value="all">Volledige zichtbare modellen</option></select></label>
+      <label><input type="checkbox" id="flip"> Kant van de doorsnedevlakken omkeren</label>
+    </div>
+    <div class="row">
+      <label>Naam van dit deel <input type="text" id="label" placeholder="bv. Moot 3" style="width:180px"></label>
+      <button id="btnPreview">Omvang bekijken</button>
+    </div>
+    <div id="preview"></div>
+    <div class="err-box" id="err1"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">2</span>Berekenen</h2>
+    <div class="row">
+      <button class="primary" id="btnRun">Berekenen</button>
+      <button id="btnPdf" disabled>Rapport A3 (PDF)</button>
+      <button id="btnColor" disabled>Kleuren in Trimble</button>
+      <button id="btnReset">Kleuren wissen</button>
+      <button id="btnAdd" disabled>Toevoegen aan project</button>
+    </div>
+    <p class="meta" id="runStatus"></p>
+    <div class="err-box" id="err2"></div>
+    <div id="result"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">3</span>Project en nacalculatie</h2>
+    <p class="muted">Voeg alle moten of IFC's van een project toe. De schatting geldt voor het hele project. Ken je de werkelijke cijfers, vul ze in en sla ze op: de volgende schatting leert daarvan.</p>
+    <div id="project"></div>
+    <div class="row">
+      <label>Project <input type="text" id="pName" style="width:200px"></label>
+      <label>Projectgewicht <input type="number" id="pTon" step="0.1"> t</label>
+    </div>
+    <div class="row">
+      <label>Gepresteerde uren <input type="number" id="pUren" step="1"></label>
+      <label>Werkelijk aantal samensteltekeningen <input type="number" id="pSam" step="1"></label>
+      <label>Werkelijk aantal monotekeningen <input type="number" id="pMono" step="1"></label>
+    </div>
+    <div class="row">
+      <button class="primary" id="btnSave">Nacalculatie opslaan</button>
+      <button id="btnClearProj">Project leegmaken</button>
+    </div>
+    <div class="err-box" id="err3"></div>
+    <p class="meta" id="saveStatus"></p>
+  </section>
+
+  <section>
+    <h2><span class="n">4</span>Kalibratie</h2>
+    <p class="muted">Bewaard in deze browser. Exporteer regelmatig een back-up; bij een nieuwe pc of gewiste browsergegevens importeer je die opnieuw.</p>
+    <div id="calib"></div>
+    <div class="row">
+      <button id="btnExport">Kalibratie exporteren</button>
+      <label class="muted">Importeren: <input type="file" id="fileImport" accept="application/json,.json"></label>
+    </div>
+    <div class="err-box" id="err4"></div>
+  </section>
+</main>
+
+<script src="https://components.connect.trimble.com/trimble-connect-workspace-api/index.js"></script>
+<script src="ifcgeom.js"></script>
+<script src="transport.js"></script>
+<script src="vlakken.js"></script>
+<script src="kalibratie.js"></script>
+<script src="rapport.js"></script>
+<script>
+"use strict";
+const WEBIFC_CDN = "https://cdn.jsdelivr.net/npm/web-ifc@0.0.66/";
+const JSPDF_CDN = "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js";
+const TC_HOSTS = ["https://app21.connect.trimble.com", "https://app.connect.trimble.com", "https://app31.connect.trimble.com", "https://app32.connect.trimble.com"];
+const PROJ_KEY = "ifcSales.project.v1";
+const SKIP = /Opening|Annotation|Space|Grid|Site|BuildingStorey|IfcBuilding$|Storey|Fastener/i;
+const $ = (id) => document.getElementById(id);
+const fmt = (v, d = 1) => Number(v).toLocaleString("nl-BE", { minimumFractionDigits: d, maximumFractionDigits: d });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const errMsg = (e) => (e && e.message) || String(e);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const S = { api: null, token: null, models: new Map(), last: null };
+let tokenWaiters = [];
+
+function status(msg, kind) { const el = $("status"); el.textContent = msg; el.className = kind || ""; }
+function showErr(id, msg) { const el = $(id); el.textContent = msg || ""; el.style.display = msg ? "block" : "none"; }
+function runStatus(msg) { $("runStatus").textContent = msg || ""; }
+
+/* ---------- Verbinding ---------- */
+function onEvent(event, data) {
+  if (event === "extension.accessToken") {
+    const t = data && typeof data === "object" ? data.data : data;
+    if (t && t !== "pending" && t !== "denied") { S.token = t; tokenWaiters.forEach((f) => f(t)); tokenWaiters = []; }
+  }
+}
+async function init() {
+  renderProject(); renderCalib();
+  if (window.parent === window) { status("Niet geladen in Trimble Connect. Open deze pagina als extensie in de 3D-viewer.", "warn"); return; }
+  try { S.api = await TrimbleConnectWorkspace.connect(window.parent, onEvent, 30000); status("Verbonden met Trimble Connect.", "ok"); }
+  catch (e) { status("Verbinding met Trimble Connect mislukt: " + errMsg(e), "err"); }
+}
+async function getToken() {
+  if (S.token) return S.token;
+  const r = await S.api.extension.requestPermission("accesstoken");
+  if (r === "denied") throw new Error("Toegang tot je Trimble-sessie geweigerd.");
+  if (r && r !== "pending") { S.token = r; return r; }
+  status("Bevestig in Trimble Connect dat de extensie je sessie mag gebruiken…", "warn");
+  return new Promise((res, rej) => { tokenWaiters.push(res); setTimeout(() => rej(new Error("Geen toestemming ontvangen binnen 60 seconden.")), 60000); });
+}
+function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("Kan " + src + " niet laden.")); document.head.appendChild(s); }); }
+async function ensureWebIfc() {
+  if (!window.WebIFC) await loadScript(WEBIFC_CDN + "web-ifc-api-iife.js");
+  if (!S.ifcApi) { const api = new WebIFC.IfcAPI(); api.SetWasmPath(WEBIFC_CDN, true); await api.Init(undefined, true); S.ifcApi = api; }
+  return S.ifcApi;
+}
+
+/* ---------- Modellen ---------- */
+async function visibleModels() {
+  const ms = ((await S.api.viewer.getModels("loaded")) || []).filter((m) => m && m.id);
+  if (!ms.length) throw new Error("Geen zichtbare modellen: zet het oogje aan bij minstens één IFC.");
+  const bad = ms.filter((m) => m.name && !/\.ifc$/i.test(m.name));
+  if (bad.length) throw new Error(`Geen IFC-bestand: ${bad.map((m) => m.name).join(", ")}. Zet het oogje daarvan uit.`);
+  return ms;
+}
+async function fetchIfcBytes(m) {
+  let file = null; try { file = await S.api.viewer.getLoadedModel(m.id); } catch (e) { file = null; }
+  if (!file || !file.name) file = { id: m.id, versionId: m.versionId, name: m.name };
+  const fileId = file.id || m.id, versionId = file.versionId, name = file.name || m.name || "model.ifc";
+  if (/\.ifczip$/i.test(name)) throw new Error("IFCZIP wordt niet ondersteund: " + name);
+  const token = await getToken(); let url = null, lastErr = "";
+  for (const host of TC_HOSTS) {
+    try { const r = await fetch(`${host}/tc/api/2.0/files/fs/${fileId}/downloadurl${versionId ? `?versionId=${encodeURIComponent(versionId)}` : ""}`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!r.ok) { lastErr = `${host}: HTTP ${r.status}`; continue; } const j = await r.json(); url = j.url || j.downloadUrl; if (url) break; }
+    catch (e) { lastErr = `${host}: ${errMsg(e)}`; }
+  }
+  if (!url) throw new Error("Downloadlink niet gekregen voor " + name + " (" + lastErr + ").");
+  const resp = await fetch(url); if (!resp.ok) throw new Error(`Download mislukt voor ${name} (HTTP ${resp.status}).`);
+  return { bytes: new Uint8Array(await resp.arrayBuffer()), name, versionId };
+}
+// IFC openen en indexeren; blijft open voor volgende berekeningen (zelfde versie)
+async function openModel(m) {
+  const c = S.models.get(m.id); if (c && c.versionId === m.versionId) return c;
+  if (c) { try { c.api.CloseModel(c.modelID); } catch (e) { /* */ } S.models.delete(m.id); }
+  runStatus(`Downloaden: ${m.name}…`); await sleep(10);
+  const f = await fetchIfcBytes(m);
+  runStatus(`Inlezen: ${f.name} (${fmt(f.bytes.length / 1e6, 0)} MB)…`); await sleep(10);
+  const api = await ensureWebIfc();
+  const modelID = api.OpenModel(f.bytes, { COORDINATE_TO_ORIGIN: false, CIRCLE_SEGMENTS: 24 });
+  const index = IfcGeom.buildIndex(WebIFC, api, modelID);
+  const mm = { id: m.id, versionId: m.versionId, name: f.name, api, modelID, index, psets: null, cal: null };
+  S.models.set(m.id, mm); return mm;
+}
+// property sets, materialen en samenbouw (één keer per model)
+function psetsOf(mm) {
+  if (mm.psets) return mm.psets;
+  const { api, modelID: mid } = mm, ps = new Map(), parent = new Map();
+  const rels = api.GetLineIDsWithType(mid, WebIFC.IFCRELDEFINESBYPROPERTIES);
+  for (let i = 0; i < rels.size(); i++) {
+    let r, def; try { r = api.GetLine(mid, rels.get(i)); def = api.GetLine(mid, r.RelatingPropertyDefinition.value); } catch (e) { continue; }
+    const pname = (def.Name && def.Name.value) || "", props = {};
+    for (const hp of def.HasProperties || def.Quantities || []) { let pr; try { pr = api.GetLine(mid, hp.value); } catch (e) { continue; }
+      const nm = pr.Name && pr.Name.value; if (!nm) continue;
+      const v = pr.NominalValue ? pr.NominalValue.value : pr.AreaValue ? pr.AreaValue.value : pr.LengthValue ? pr.LengthValue.value : pr.WeightValue ? pr.WeightValue.value : pr.VolumeValue ? pr.VolumeValue.value : null;
+      if (v != null) props[nm] = v; }
+    (r.RelatedObjects || []).forEach((o) => { const e = ps.get(o.value) || {}; e[pname] = Object.assign(e[pname] || {}, props); ps.set(o.value, e); });
+  }
+  const ag = api.GetLineIDsWithType(mid, WebIFC.IFCRELAGGREGATES);
+  for (let i = 0; i < ag.size(); i++) { let r; try { r = api.GetLine(mid, ag.get(i)); } catch (e) { continue; } (r.RelatedObjects || []).forEach((o) => parent.set(o.value, r.RelatingObject && r.RelatingObject.value)); }
+  mm.psets = { ps, parent }; return mm.psets;
+}
+// objecten van een model in de viewer (zichtbaar of alle) → express-id's, met runtime-id's voor het inkleuren
+async function viewerObjects(mm, onlyVisible) {
+  let groups = [];
+  try { groups = (await (onlyVisible ? S.api.viewer.getObjects(undefined, { visible: true }) : S.api.viewer.getObjects())) || []; }
+  catch (e) { throw new Error("Trimble gaf de " + (onlyVisible ? "zichtbare " : "") + "objecten niet terug: " + errMsg(e)); }
+  const rt = []; groups.filter((g) => g.modelId === mm.id).forEach((g) => (g.objects || []).forEach((o) => { if (o && o.id != null) rt.push(o.id); }));
+  const exprToRt = new Map(), ids = new Set(); let unmatched = 0;
+  for (let i = 0; i < rt.length; i += 2000) {
+    const chunk = rt.slice(i, i + 2000); let ext;
+    try { ext = await S.api.viewer.convertToObjectIds(mm.id, chunk); }
+    catch (e) { ext = await Promise.all(chunk.map((id) => S.api.viewer.convertToObjectIds(mm.id, [id]).then((r) => r[0]).catch(() => null))); }
+    chunk.forEach((id, k) => { const eid = ext[k] ? mm.index.byGuid.get(IfcGeom.guidToHex(ext[k])) : null; if (eid == null) { unmatched++; return; } exprToRt.set(eid, id); ids.add(eid); });
+  }
+  // samenbouwen openvouwen naar hun onderdelen
+  IfcGeom.expandIds(mm.index, [...ids]).forEach((id) => ids.add(id));
+  return { ids, exprToRt, nViewer: rt.length, unmatched };
+}
+
+/* ---------- IJking IFC ↔ viewer (voor de doorsnedevlakken) ---------- */
+function calibrate(pairs) {
+  const diag = (b) => Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]);
+  const med = (a) => { const s = a.slice().sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  const ratios = pairs.map(([ifc, tv]) => diag(ifc) / diag(tv)).filter((r) => Number.isFinite(r) && r > 0);
+  if (!ratios.length) throw new Error("Geen bruikbare afmetingen om IFC en viewer op elkaar af te stemmen.");
+  const s = Math.pow(10, Math.round(Math.log10(med(ratios))));
+  const off = [0, 1, 2].map((i) => med([].concat(...pairs.map(([ifc, tv]) => [tv.min[i] * s - ifc.min[i], tv.max[i] * s - ifc.max[i]]))));
+  const res = Math.max(...pairs.map(([ifc, tv]) => Math.max(...[0, 1, 2].map((i) => Math.max(Math.abs(ifc.min[i] + off[i] - tv.min[i] * s), Math.abs(ifc.max[i] + off[i] - tv.max[i] * s))))));
+  return { s, off, res };
+}
+async function calibrateModel(mm, sel) {
+  if (mm.cal) return mm.cal;
+  const cand = [...sel.exprToRt.entries()].filter(([eid]) => { const inf = mm.index.info.get(eid); return inf && /Plate|Beam|Member|Column/i.test(inf.type); });
+  const pick = []; for (let i = 0; i < cand.length && pick.length < 40; i += Math.max(1, Math.floor(cand.length / 40))) pick.push(cand[i]);
+  if (!pick.length) throw new Error("Geen objecten om IFC en viewer af te stemmen in " + mm.name + ".");
+  let boxes = []; try { boxes = (await S.api.viewer.getObjectBoundingBoxes(mm.id, pick.map((p) => p[1]))) || []; } catch (e) { boxes = []; }
+  const pairs = [];
+  pick.forEach(([eid, rid], i) => { const b = boxes.find((x) => x.id === rid) || boxes[i]; const bb = b && (b.boundingBox || b); if (!bb || !bb.min) return;
+    const tris = IfcGeom.getTriangles(mm.api, mm.modelID, [eid]); if (!tris.length) return; const a = IfcGeom.aabb(tris);
+    pairs.push([{ min: a.min, max: a.max }, { min: [bb.min.x, bb.min.y, bb.min.z], max: [bb.max.x, bb.max.y, bb.max.z] }]); });
+  if (!pairs.length) throw new Error("De viewer gaf geen afmetingen terug; de doorsnedevlakken kunnen niet op het IFC gelegd worden.");
+  mm.cal = calibrate(pairs); return mm.cal;
+}
+// doorsnedevlakken in IFC-coördinaten. De API geeft mm; bij twijfel (viewer in meter) wordt de lezing gekozen die door het model gaat.
+async function planesFor(mm, cal, bbIfc) {
+  let pl = []; try { pl = (await S.api.viewer.getSectionPlanes()) || []; } catch (e) { pl = []; }
+  const inBox = (p) => [0, 1, 2].every((i) => p[i] >= bbIfc.min[i] - 1000 && p[i] <= bbIfc.max[i] + 1000);
+  return pl.filter((p) => Number.isFinite(p.positionX) && Number.isFinite(p.directionX)).map((p) => {
+    const pos = [p.positionX, p.positionY, p.positionZ], d = [p.directionX, p.directionY, p.directionZ], l = Math.hypot(...d);
+    const asMm = pos.map((v, i) => v - cal.off[i]), asUnit = pos.map((v, i) => v * cal.s - cal.off[i]);
+    const P = inBox(asMm) || !inBox(asUnit) ? asMm : asUnit;
+    return { P, d: d.map((v) => v / l), id: p.id };
+  });
+}
+
+/* ---------- Omvang bepalen ---------- */
+// geeft per model: express-id's in de omvang, runtime-koppeling, aantal doorsneden onderdelen
+async function scopeOf(mm, scope, flip) {
+  const sel = await viewerObjects(mm, scope === "vis");
+  let ids = [...sel.ids].filter((id) => { const inf = mm.index.info.get(id); return inf && !SKIP.test(inf.type) && !/Assembly/i.test(inf.type); });
+  let planes = [], cut = 0, cal = null;
+  if (scope === "vis") {
+    let pl = []; try { pl = (await S.api.viewer.getSectionPlanes()) || []; } catch (e) { pl = []; }
+    if (pl.length) {
+      // eerst knippen op de omhullende uit de viewer: zo wordt enkel de geometrie van de moot zelf ingelezen
+      cal = await calibrateModel(mm, sel);
+      const rid = ids.map((id) => sel.exprToRt.get(id)), boxes = new Map();
+      const withRt = rid.filter((x) => x != null);
+      for (let i = 0; i < withRt.length; i += 2000) {
+        let bs = []; try { bs = (await S.api.viewer.getObjectBoundingBoxes(mm.id, withRt.slice(i, i + 2000))) || []; } catch (e) { bs = []; }
+        bs.forEach((b, k) => { const bb = b && (b.boundingBox || b); if (bb && bb.min) boxes.set(b.id != null ? b.id : withRt[i + k], bb); });
+      }
+      const toIfc = (v) => [v.x * cal.s - cal.off[0], v.y * cal.s - cal.off[1], v.z * cal.s - cal.off[2]];
+      const ib = new Map(); let mn = [1e18, 1e18, 1e18], mx = [-1e18, -1e18, -1e18];
+      ids.forEach((id, k) => { const bb = rid[k] != null ? boxes.get(rid[k]) : null; if (!bb) return; const a = toIfc(bb.min), b = toIfc(bb.max), lo = a.map((v, i) => Math.min(v, b[i])), hi = a.map((v, i) => Math.max(v, b[i]));
+        ib.set(id, { lo, hi }); for (let i = 0; i < 3; i++) { mn[i] = Math.min(mn[i], lo[i]); mx[i] = Math.max(mx[i], hi[i]); } });
+      planes = await planesFor(mm, cal, { min: mn, max: mx });
+      const sgn = flip ? -1 : 1, geoCache = new Map();
+      ids = ids.filter((id) => {
+        let b = ib.get(id);
+        if (!b) { const t = IfcGeom.getTriangles(mm.api, mm.modelID, [id]); if (!t.length) return false; geoCache.set(id, t); const a = IfcGeom.aabb(t); b = { lo: a.min, hi: a.max }; }
+        const c = b.lo.map((v, i) => (v + b.hi[i]) / 2); let keep = true, crossed = false;
+        for (const q of planes) {
+          const f = (p) => (p[0] - q.P[0]) * q.d[0] + (p[1] - q.P[1]) * q.d[1] + (p[2] - q.P[2]) * q.d[2];
+          if (sgn * f(c) > 0) { keep = false; break; }
+          let lo = Infinity, hi = -Infinity; for (let m = 0; m < 8; m++) { const v = f([m & 1 ? b.hi[0] : b.lo[0], m & 2 ? b.hi[1] : b.lo[1], m & 4 ? b.hi[2] : b.lo[2]]); lo = Math.min(lo, v); hi = Math.max(hi, v); }
+          if (lo < -5 && hi > 5) crossed = true;
+        }
+        if (keep && crossed) cut++; return keep;
+      });
+      const geo = new Map(); ids.forEach((id) => { const t = geoCache.get(id) || IfcGeom.getTriangles(mm.api, mm.modelID, [id]); if (t.length) geo.set(id, t); });
+      ids = ids.filter((id) => geo.has(id));
+      return { ids, geo, exprToRt: sel.exprToRt, nViewer: sel.nViewer, unmatched: sel.unmatched, planes, cut, cal };
+    }
+  }
+  const geo = new Map(); ids.forEach((id) => { const t = IfcGeom.getTriangles(mm.api, mm.modelID, [id]); if (t.length) geo.set(id, t); });
+  ids = ids.filter((id) => geo.has(id));
+  return { ids, geo, exprToRt: sel.exprToRt, nViewer: sel.nViewer, unmatched: sel.unmatched, planes, cut, cal };
+}
+function weightOf(mm, id, tris) {
+  const p = psetsOf(mm).ps.get(id) || {}, vb = p.VBSC || {}, tq = p["Tekla Quantity"] || {};
+  const w = Number(vb.WEIGHT) || Number(tq.Weight); if (w > 0) return w;
+  let v = 0; for (const t of tris) v += (t[0][0] * (t[1][1] * t[2][2] - t[1][2] * t[2][1]) - t[0][1] * (t[1][0] * t[2][2] - t[1][2] * t[2][0]) + t[0][2] * (t[1][0] * t[2][1] - t[1][1] * t[2][0])) / 6;
+  return Math.abs(v) * 7.85e-6;
+}
+async function preview() {
+  showErr("err1", ""); $("preview").innerHTML = "";
+  if (!S.api) { showErr("err1", "Niet verbonden met Trimble Connect."); return; }
+  const btn = $("btnPreview"); btn.disabled = true;
+  try {
+    const ms = await visibleModels(), scope = $("scope").value, rows = [];
+    for (const m of ms) {
+      const mm = await openModel(m); runStatus(`Omvang bepalen: ${mm.name}…`); await sleep(10);
+      const sc = await scopeOf(mm, scope, $("flip").checked);
+      const t = sc.ids.reduce((s, id) => s + weightOf(mm, id, sc.geo.get(id)), 0) / 1000;
+      rows.push({ name: mm.name, n: sc.ids.length, t, planes: sc.planes.length, cut: sc.cut, unmatched: sc.unmatched });
+    }
+    runStatus("");
+    $("preview").innerHTML = `<div class="scroll"><table><tr><th>Model</th><th>Onderdelen</th><th>Ton</th><th>Vlakken</th><th>Doorsneden</th></tr>${rows.map((r) => `<tr><td>${esc(r.name)}</td><td>${r.n}</td><td>${fmt(r.t, 1)}</td><td>${r.planes}</td><td>${r.cut}</td></tr>`).join("")}</table></div>` +
+      rows.filter((r) => r.cut).map((r) => `<div class="warn-box">${esc(r.name)}: ${r.cut} onderdeel/onderdelen worden door een doorsnedevlak doorgesneden en tellen volledig mee. Staat het vlak op de voeg?</div>`).join("") +
+      (scope === "vis" && rows.every((r) => !r.planes) ? `<div class="meta">Geen doorsnedevlakken actief: enkel de zichtbaarheid telt.</div>` : "") +
+      `<div class="meta">Klopt het tonnage niet met de moot die je ziet? Vink "Kant omkeren" aan.</div>`;
+  } catch (e) { showErr("err1", errMsg(e)); runStatus(""); }
+  finally { btn.disabled = false; }
+}
+
+/* ---------- Berekenen ---------- */
+async function run() {
+  showErr("err2", ""); $("result").innerHTML = "";
+  if (!S.api) { showErr("err2", "Niet verbonden met Trimble Connect."); return; }
+  const btn = $("btnRun"); btn.disabled = true; $("btnPdf").disabled = $("btnColor").disabled = $("btnAdd").disabled = true;
+  try {
+    const ms = await visibleModels(), scope = $("scope").value, parts = [];
+    for (const m of ms) {
+      const mm = await openModel(m); runStatus(`Omvang bepalen: ${mm.name}…`); await sleep(10);
+      const sc = await scopeOf(mm, scope, $("flip").checked);
+      if (!sc.ids.length) continue;
+      const { ps, parent } = psetsOf(mm);
+      const els = sc.ids.map((id) => { let l = {}; try { l = mm.api.GetLine(mm.modelID, id); } catch (e) { /* */ } const inf = mm.index.info.get(id) || {};
+        return { id, type: inf.type, name: inf.name, tag: inf.tag, profile: (l.Description && l.Description.value) || (l.ObjectType && l.ObjectType.value) || "", ps: ps.get(id) || {}, asm: parent.get(id), tris: sc.geo.get(id) }; });
+      runStatus(`Rekenen: ${mm.name}, ${els.length} onderdelen… (de viewer kan even niet reageren)`); await sleep(30);
+      const r = Vlakken.analyse(els);
+      parts.push(summarize(mm, sc, r, els, scope));
+    }
+    if (!parts.length) throw new Error("Niets in de omvang: alles verborgen of weggeknipt?");
+    const lab = $("label").value.trim(); if (lab && parts.length === 1) parts[0].label = lab; else if (lab) parts.forEach((p) => { p.label = `${lab} – ${p.label}`; });
+    S.last = parts; runStatus(`Klaar: ${parts.length} deel/delen.`); renderResult(parts);
+    $("btnPdf").disabled = $("btnColor").disabled = $("btnAdd").disabled = false;
+  } catch (e) { showErr("err2", errMsg(e)); runStatus(""); }
+  finally { btn.disabled = false; }
+}
+function summarize(mm, sc, r, els, scope) {
+  const by = new Map(els.map((e) => [e.id, e])), tOf = (p) => { const m = /^PL([\d.]+)/i.exec(p || ""); return m ? Number(m[1]) : null; };
+  let W = 0, A = 0, nTek = 0, nFix = 0, nPos = 0; const mono = new Set();
+  r.U.forEach((u) => { let a = 0, w = 0, mv = 0, ma = 0, hasA = true;
+    u.ids.forEach((id) => { const e = by.get(id), vb = e.ps.VBSC || {}, tq = e.ps["Tekla Quantity"] || {}; if (vb.PART_POS) nPos++;
+      w += weightOf(mm, id, e.tris); const na = tq["Net surface area"]; if (na != null) a += Number(na); else hasA = false;
+      for (const t of e.tris) { const ux = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]], vx = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]];
+        const c = [ux[1] * vx[2] - ux[2] * vx[1], ux[2] * vx[0] - ux[0] * vx[2], ux[0] * vx[1] - ux[1] * vx[0]]; ma += Math.hypot(...c) / 2;
+        mv += (t[0][0] * (t[1][1] * t[2][2] - t[1][2] * t[2][1]) - t[0][1] * (t[1][0] * t[2][2] - t[1][2] * t[2][0]) + t[0][2] * (t[1][0] * t[2][1] - t[1][1] * t[2][0])) / 6; } });
+    u.w = w; const bad = Math.abs(Math.abs(mv) * 7.85e-6 / Math.max(w, 1e-9) - 1) > 0.03;
+    if (hasA) { u.A = a; nTek++; } else if (bad && tOf(u.prof)) { u.A = 2 * w / 7.85e-6 / tOf(u.prof) / 1e6; nFix++; } else u.A = ma / 1e6;
+    W += w; A += u.A;
+    const vb = by.get(u.ids[0]).ps.VBSC || {};
+    // monotekening: gelijke stukken één keer (Tekla-positie als die bestaat, anders geometrie)
+    const pos = vb.PART_POS || (by.get(u.ids[0]).ps["Tekla Common"] || {})["Part position"];
+    mono.add(pos && !u.formed ? "P|" + pos : [u.prof, vb.MATERIAL, u.formed ? vb["ontvouwing breedte"] : vb.LENGTH, w.toFixed(1), u.dims.map(Math.round).sort((x, y) => x - y).join("x")].join("|")); });
+  const warn = r.warn.slice();
+  if (!nPos) warn.unshift("Geen Tekla-nummering (PART_POS) in het IFC: monotekeningen ontdubbeld op geometrie. Gespiegelde stukken tellen als gelijk.");
+  if (nTek < r.U.length) warn.push(`Oppervlakte: ${nTek} van ${r.U.length} onderdelen uit Tekla Net surface area, de rest uit de geometrie${nFix ? `; ${nFix} met kapotte geometrie geschat uit het gewicht` : ""}.`);
+  if (sc.cut) warn.push(`${sc.cut} onderdeel/onderdelen door een doorsnedevlak gesneden: volledig meegeteld aan de kant van hun zwaartepunt.`);
+  if (sc.unmatched) warn.push(`${sc.unmatched} object(en) uit de viewer niet gevonden in het IFC (andere modelversie?).`);
+  const or = {}; r.Z.forEach((z) => { or[z.orient] = (or[z.orient] || 0) + 1; });
+  const scopeText = scope === "vis" ? (sc.planes.length ? `zichtbaar, ${sc.planes.length} doorsnedevlak(ken)` : "zichtbaar in de viewer") : "volledig model";
+  return { label: mm.name.replace(/\.ifc$/i, ""), source: mm.name, modelId: mm.id, scopeText, r, exprToRt: sc.exprToRt,
+    dims: r.box.dims.map((v) => v), t: W / 1000, A, V: W / 7850, parts: els.length, formed: r.U.filter((u) => u.formed).length, M: mono.size,
+    Z: r.Z.length, orientText: Object.entries(or).map(([k, v]) => `${v} ${k}`).join(", "), nDS: r.DS.length, T: r.TY.length, L: r.LS.length, R: r.Z.length + r.TY.length + r.LS.length, warn, version: r.version };
+}
+const partFeat = (p) => ({ label: p.label, source: p.source, scope: p.scopeText, Z: p.Z, T: p.T, L: p.L, M: p.M, t: p.t, nDS: p.nDS, A: p.A, dims: p.dims.map(Math.round), version: p.version });
+function predText(pr) {
+  const m = pr.m, rng = Number.isFinite(pr.spread) && m.um.n >= 4 ? ` (± ${fmt(pr.spread * 100, 0)} %)` : "";
+  return { sam: m.sm.n ? fmt(pr.samenstel, 0) : "–", uren: Number.isFinite(pr.uren) ? fmt(pr.uren, 0) + " u" + rng : "–" };
+}
+function renderResult(parts) {
+  const rows = parts.map((p) => { const pr = Kalibratie.predict([partFeat(p)]), tx = predText(pr); p.Rk = tx.sam; p.Uk = tx.uren;
+    return `<tr><td>${esc(p.label)}</td><td>${fmt(p.dims[0], 0)} × ${fmt(p.dims[1], 0)} × ${fmt(p.dims[2], 0)}</td><td>${fmt(p.t, 1)}</td><td>${fmt(p.A, 1)}</td><td>${fmt(p.V, 2)}</td><td>${p.parts}</td><td>${p.M}</td><td>${p.Z}</td><td>${p.nDS} / ${p.T}</td><td>${p.L}</td><td>${p.R}</td><td>${tx.sam}</td><td>${tx.uren}</td></tr>`; }).join("");
+  const det = parts.map((p) => `<details><summary>${esc(p.label)}: zichten, schotten, waarschuwingen</summary>
+    <div class="scroll"><table><tr><th>Zicht</th><th class="l">Stand</th><th>Platen</th><th class="l">Naam in IFC</th></tr>${p.r.Z.map((z) => `<tr><td><span class="sw" style="background:${Rapport.ZCOL[(z.k - 1) % Rapport.ZCOL.length]}"></span>Z${z.k}</td><td class="l">${z.orient}</td><td>${z.els.length}</td><td class="l">${esc(z.names)}</td></tr>`).join("")}</table></div>
+    <div class="scroll"><table><tr><th>Schot</th><th>Positie (mm)</th><th>Type</th><th>Platen</th><th class="l">Raakt</th></tr>${p.r.DS.map((d) => `<tr><td>S${d.k}</td><td>${fmt(d.s - p.r.DS[0].s, 0)}</td><td>T${d.type}</td><td>${d.els.length}</td><td class="l">${d.tz.map((k) => "Z" + k).join(" ")}</td></tr>`).join("")}</table></div>
+    ${p.warn.map((w) => `<div class="warn-box">${esc(w)}</div>`).join("")}</details>`).join("");
+  $("result").innerHTML = `<div class="scroll"><table><tr><th>Deel</th><th>L × B × H (mm)</th><th>Ton</th><th>m²</th><th>m³</th><th>Onderd.</th><th>Mono</th><th>Zichten</th><th>Schotten / types</th><th>Langs</th><th>Samenstel (regels)</th><th>Samenstel (gekal.)</th><th>Uren</th></tr>${rows}</table></div>${det}`;
+}
+
+/* ---------- Rapport en kleuren ---------- */
+async function makePdf() {
+  if (!S.last) return; const btn = $("btnPdf"); btn.disabled = true;
+  try {
+    if (!window.jspdf) await loadScript(JSPDF_CDN);
+    runStatus("Rapport opbouwen…"); await sleep(20);
+    const parts = S.last, tot = partsTotal(parts), pr = Kalibratie.predict(parts.map(partFeat)), tx = predText(pr);
+    const meta = { title: $("label").value.trim() || parts.map((p) => p.label).join(" + "), version: Vlakken.VERSION, project: false, totals: tot,
+      predictLines: [["Samensteltekeningen (regels)", tot.R], ["Samensteltekeningen (gekalibreerd)", tx.sam], ["Uren (schatting)", tx.uren], ["Kalibratie", `${pr.m.nUsed} project(en)`]],
+      note: "Regels: zicht = vlak van de buitenhuid (knik langs de lengte > 5° = nieuw zicht); dwarsschot = plaat loodrecht op de lengteas die ≥ 3 zichten raakt of tussen 2 tegenoverliggende zichten zit; schottypes exact gelijk; langsschot = plaat langs de lengteas, raakt ≥ 2 zichten, ≥ 50 % van de lengte." };
+    const buf = Rapport.pdf(window.jspdf.jsPDF, parts, meta, fmt);
+    const blob = new Blob([buf], { type: "application/pdf" }), a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = `Salesberekening_${meta.title.replace(/[^\w.-]+/g, "_")}.pdf`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    runStatus("Rapport klaar.");
+  } catch (e) { showErr("err2", errMsg(e)); runStatus(""); }
+  finally { btn.disabled = false; }
+}
+function partsTotal(parts) { const s = { t: 0, A: 0, V: 0, parts: 0, M: 0, Z: 0, nDS: 0, T: 0, L: 0, R: 0 }; parts.forEach((p) => Object.keys(s).forEach((k) => { s[k] += p[k] || 0; })); return s; }
+async function colorize() {
+  if (!S.last) return;
+  try {
+    await S.api.viewer.setObjectState(undefined, { color: "reset" });
+    for (const p of S.last) {
+      const byCol = new Map();
+      p.r.U.forEach((u) => { const c = Rapport.colorOf(u); if (u.klasse === "overig") return; u.ids.forEach((id) => { const rid = p.exprToRt.get(id); if (rid == null) return; (byCol.get(c) || byCol.set(c, []).get(c)).push(rid); }); });
+      for (const [c, rids] of byCol) await S.api.viewer.setObjectState({ modelObjectIds: [{ modelId: p.modelId, objectRuntimeIds: rids }] }, { color: c });
+    }
+    runStatus("Ingekleurd: zichten in blauw/groen, dwarsschotten oranje, langsschotten paars.");
+  } catch (e) { showErr("err2", "Inkleuren mislukt: " + errMsg(e)); }
+}
+async function resetColors() { try { await S.api.viewer.setObjectState(undefined, { color: "reset" }); } catch (e) { showErr("err2", errMsg(e)); } }
+
+/* ---------- Project ---------- */
+function projLoad() { try { return JSON.parse(localStorage.getItem(PROJ_KEY) || "[]"); } catch (e) { return []; } }
+function projSave(list) { localStorage.setItem(PROJ_KEY, JSON.stringify(list)); }
+function addToProject() {
+  if (!S.last) return; const list = projLoad();
+  S.last.forEach((p) => { const f = partFeat(p); f.key = f.label + "|" + f.source + "|" + f.scope + "|" + fmt(f.t, 3); if (!list.some((x) => x.key === f.key)) list.push(f); });
+  projSave(list); renderProject(); $("saveStatus").textContent = "Toegevoegd aan het project.";
+}
+function renderProject() {
+  const list = projLoad();
+  if (!list.length) { $("project").innerHTML = `<div class="empty">Nog geen delen in dit project. Bereken een deel en klik op "Toevoegen aan project".</div>`; return; }
+  const pr = Kalibratie.predict(list), tx = predText(pr), s = pr.tot;
+  $("project").innerHTML = `<div class="scroll"><table><tr><th>Deel</th><th>Ton</th><th>Mono</th><th>Zichten</th><th>Schottypes</th><th>Langs</th><th>Samenstel (regels)</th><th></th></tr>
+    ${list.map((p, i) => `<tr><td>${esc(p.label)}<div class="meta">${esc(p.source)} · ${esc(p.scope)}</div></td><td>${fmt(p.t, 1)}</td><td>${p.M}</td><td>${p.Z}</td><td>${p.T}</td><td>${p.L}</td><td>${p.Z + p.T + p.L}</td><td><button data-del="${i}">×</button></td></tr>`).join("")}
+    <tr class="tot"><td>Totaal</td><td>${fmt(s.t, 1)}</td><td>${s.M}</td><td>${s.Z}</td><td>${s.T}</td><td>${s.L}</td><td>${s.R}</td><td></td></tr></table></div>
+    <div class="kpis"><div><span>Samensteltekeningen (regels)</span><b class="big">${s.R}</b></div><div><span>Samensteltekeningen (gekalibreerd)</span><b class="big">${tx.sam}</b></div>
+    <div><span>Monotekeningen (geschat)</span><b class="big">${s.M}</b></div><div><span>Uren (schatting)</span><b class="big">${tx.uren}</b></div></div>
+    <div class="meta">${esc(pr.m.sm.text)} ${esc(pr.m.um.text)}</div>`;
+  $("project").querySelectorAll("[data-del]").forEach((b) => b.addEventListener("click", () => { const l = projLoad(); l.splice(Number(b.dataset.del), 1); projSave(l); renderProject(); }));
+  if (!$("pTon").value) $("pTon").placeholder = fmt(s.t, 1);
+}
+function saveNacalc() {
+  showErr("err3", ""); const list = projLoad();
+  if (!list.length) { showErr("err3", "Het project is leeg: voeg eerst de berekende delen toe."); return; }
+  const num = (id) => { const v = $(id).value.trim(); return v === "" ? NaN : Number(v.replace(",", ".")); };
+  const uren = num("pUren"), sam = num("pSam"), mono = num("pMono"), ton = num("pTon"), name = $("pName").value.trim();
+  if (!name) { showErr("err3", "Geef het project een naam."); return; }
+  if (!(uren > 0) && !(sam > 0) && !(mono > 0)) { showErr("err3", "Vul minstens de uren of een werkelijk aantal tekeningen in."); return; }
+  if (!(ton > 0)) { showErr("err3", "Vul het projectgewicht in: daarmee controleer ik of alle delen ingeladen zijn."); return; }
+  const sum = list.reduce((s, p) => s + p.t, 0), dev = Math.abs(sum - ton) / ton;
+  if (dev > 0.02) { showErr("err3", `De ingeladen delen wegen ${fmt(sum, 1)} t, het project ${fmt(ton, 1)} t (${fmt(dev * 100, 1)} % verschil). Ontbreekt er een deel, of telt er een deel dubbel? Niet opgeslagen.`); return; }
+  Kalibratie.addProject({ naam: name, ton, uren: uren > 0 ? uren : null, samenstel: sam > 0 ? sam : null, mono: mono > 0 ? mono : null, parts: list, rulesVersion: Vlakken.VERSION });
+  $("saveStatus").textContent = `Nacalculatie "${name}" opgeslagen. Exporteer de kalibratie als back-up.`; renderCalib(); renderProject();
+}
+function renderCalib() {
+  const db = Kalibratie.load(), m = Kalibratie.model();
+  if (!db.projects.length) { $("calib").innerHTML = `<div class="empty">Nog geen nacalculaties. Tot dan toont de app enkel de regeltelling.</div>`; return; }
+  $("calib").innerHTML = `<div class="meta">${esc(m.sm.text)}<br>${esc(m.um.text)}${Number.isFinite(m.um.spread) ? ` Typische afwijking: ${fmt(m.um.spread * 100, 0)} %.` : ""}</div>
+    <div class="scroll"><table><tr><th>Project</th><th>Ton</th><th>Samenstel (regels)</th><th>Samenstel (werkelijk)</th><th>Mono (geschat)</th><th>Mono (werkelijk)</th><th>Uren</th><th>Meetellen</th><th></th></tr>
+    ${db.projects.map((p) => { const s = Kalibratie.totals(p.parts); return `<tr><td>${esc(p.naam)}<div class="meta">${new Date(p.saved).toLocaleDateString("nl-BE")} · ${p.parts.length} deel/delen</div></td><td>${fmt(p.ton, 1)}</td><td>${s.R}</td><td>${p.samenstel ?? "–"}</td><td>${s.M}</td><td>${p.mono ?? "–"}</td><td>${p.uren ?? "–"}</td>
+      <td><input type="checkbox" data-ex="${esc(p.id)}" ${p.excluded ? "" : "checked"}></td><td><button data-rm="${esc(p.id)}">×</button></td></tr>`; }).join("")}</table></div>`;
+  $("calib").querySelectorAll("[data-ex]").forEach((c) => c.addEventListener("change", () => { Kalibratie.setExcluded(c.dataset.ex, !c.checked); renderCalib(); renderProject(); }));
+  $("calib").querySelectorAll("[data-rm]").forEach((b) => b.addEventListener("click", () => { if (!confirm("Deze nacalculatie verwijderen?")) return; Kalibratie.removeProject(b.dataset.rm); renderCalib(); renderProject(); }));
+}
+function exportCalib() {
+  const blob = new Blob([Kalibratie.exportJson()], { type: "application/json" }), a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = `kalibratie_${new Date().toISOString().slice(0, 10)}.json`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+async function importCalib(file) {
+  showErr("err4", ""); if (!file) return;
+  try { const n = Kalibratie.importJson(await file.text(), "merge"); renderCalib(); renderProject(); $("saveStatus").textContent = `${n} nacalculatie(s) geïmporteerd.`; }
+  catch (e) { showErr("err4", "Import mislukt: " + errMsg(e)); }
+  $("fileImport").value = "";
+}
+
+$("btnPreview").addEventListener("click", preview);
+$("btnRun").addEventListener("click", run);
+$("btnPdf").addEventListener("click", makePdf);
+$("btnColor").addEventListener("click", colorize);
+$("btnReset").addEventListener("click", resetColors);
+$("btnAdd").addEventListener("click", addToProject);
+$("btnSave").addEventListener("click", saveNacalc);
+$("btnClearProj").addEventListener("click", () => { if (confirm("Alle delen uit het huidige project verwijderen? De kalibratie blijft bewaard.")) { projSave([]); renderProject(); } });
+$("btnExport").addEventListener("click", exportCalib);
+$("fileImport").addEventListener("change", (e) => importCalib(e.target.files[0]));
+init();
+</script>
+</body>
+</html>
