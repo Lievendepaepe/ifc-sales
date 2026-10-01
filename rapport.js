@@ -78,7 +78,7 @@
         ["Samensteltekeningen (gekalibreerd)", p.Rk], ["Uren (schatting)", p.Uk]], 62, 70);
       // zichten en schotten
       y += 4; doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.text("Zichten", x2, y); doc.setFont("helvetica", "normal");
-      y = table(x2, y + 5, ["#", "Stand", "Platen", "Naam in IFC"], p.r.Z.map((z) => ["Z" + z.k, z.orient, z.els.length, z.names]), [12, 24, 14, 90], 8.5);
+      y = table(x2, y + 5, ["#", "Stand", "Platen", "Naam in IFC"], p.r.Z.map((z) => [z.label || "Z" + z.k, z.orient, z.els.length, z.names]), [12, 24, 14, 90], 8.5);
       y += 3; doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.text("Dwarsschotten", x2, y); doc.setFont("helvetica", "normal");
       y = table(x2, y + 5, ["#", "Positie (mm)", "Type", "Platen", "Raakt"], p.r.DS.map((d) => ["S" + d.k, f0(d.s - p.r.DS[0].s), "T" + d.type, d.els.length, d.tz.map((k) => "Z" + k).join(" ")]), [12, 26, 14, 14, 74], 8.5);
       // waarschuwingen

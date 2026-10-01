@@ -11,16 +11,18 @@
  *     Een zicht korter dan 25 % van de lengte telt niet (goot, lokale uitsparing).
  *  5. Dwarsschot: platen loodrecht op de lengteas, gegroepeerd per positie, die samen ≥ 3 zichten raken of tussen 2
  *     tegenoverliggende zichten zitten. Types: exact gelijk (±2 mm, ±0,5 % gewicht).
+ *  4b. Open zicht: enkelwandige huidplaat (aan beide kanten buitenlucht), ≥ 50 % van de lengte en ≥ 1 000 mm breed.
  *  6. Langsschot: platen evenwijdig aan de lengteas, geen huid, raken ≥ 2 zichten, samen ≥ 50 % van de lengte.
+ *  7. Verstijvers en details krijgen een 'ouder': het zicht, schot of langsschot waaraan ze (rechtstreeks of via andere details) vastzitten.
  */
 (function (root) {
   "use strict";
   const T = root.Transport, G = root.IfcGeom;
-  const VERSION = 1;
+  const VERSION = 2;
   const DEF = { TOL: 3, UNION_TOL: 10, MAJOR_FRAC: 0.1, EDGE_FRAC: 0.5, ANG_PERP: 0.17, ANG_PAR: 0.98, MIN_W: 150, DW_MIN_W: 300,
     MIN_LFRAC: 0.25, SAMPLES: 15, ESC_MIN: 0.4, ESC_DIFF: 0.3, PAD_CON: 0.2, ZICHT_COS: Math.cos(15 * Math.PI / 180),
     ZICHT_TOUCH_COS: Math.cos(30 * Math.PI / 180), SEAM_COS: Math.cos(5 * Math.PI / 180), ZICHT_OFF: 50, SCHOT_POS: 25,
-    LANGS_FRAC: 0.5, SLICES: 15, CLOSE2D: 3, CELL: 10 };
+    LANGS_FRAC: 0.5, SLICES: 15, CLOSE2D: 3, CELL: 10, OPEN_MIN_W: 1000, OPEN_LFRAC: 0.5 };
 
   const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
   const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -137,6 +139,13 @@
       const [a, b] = u.esc; if (Math.max(a, b) >= P.ESC_MIN && Math.abs(a - b) >= P.ESC_DIFF) { u.huid = true; u.out = a > b ? u.n : u.n.map((v) => -v); }
     });
 
+    // 2b. open zichten: enkelwandige huid, aan beide kanten buitenlucht
+    const C0 = [0, 1, 2].map((i) => U.reduce((a, u) => a + u.c[i], 0) / U.length);
+    U.forEach((u) => {
+      if (u.huid || !u.cand || !u.esc || u.esc[0] < 0.9 || u.esc[1] < 0.9) return;
+      if ((u.lL[1] - u.lL[0]) < P.OPEN_LFRAC * Llen || u.width < P.OPEN_MIN_W) return;
+      const sg = Math.sign(dot(sub(u.c, C0), u.n)) || 1; u.huid = true; u.openHuid = true; u.out = u.n.map((v) => v * sg);
+    });
     // 3. zichten
     const H = U.filter((u) => u.huid), par = H.map((_, i) => i), f = (i) => (par[i] === i ? i : (par[i] = f(par[i])));
     const ovL = (a, b) => { const o = Math.min(a.lL[1], b.lL[1]) - Math.max(a.lL[0], b.lL[0]); return o / Math.max(1, Math.min(a.lL[1] - a.lL[0], b.lL[1] - b.lL[0])); };
@@ -161,11 +170,13 @@
       if (z) { u.huid = true; u.added = true; u.out = dot(z.n, u.n) > 0 ? u.n : u.n.map((v) => -v); z.els.push(u); } });
     Z.forEach((z, k) => { z.k = k + 1; z.els.forEach((u) => { u.zicht = z; }); z.bb = aabbOf(z.els.flatMap((u) => u.tris)); z.T = z.els.flatMap((u) => u.T);
       z.orient = Math.abs(z.n[2]) > 0.98 ? "horizontaal" : Math.abs(z.n[2]) < 0.17 ? "verticaal" : "schuin";
+      z.open = z.els.every((u) => u.openHuid); z.deelsOpen = !z.open && z.els.some((u) => u.openHuid);
+      z.label = "Z" + z.k + (z.open ? " open" : z.deelsOpen ? " deels open" : "");
       z.names = [...new Set(z.els.map((u) => u.name))].join(" / "); });
 
     // 4. dwars / langs
     U.forEach((u) => { if (u.huid) return; u.tz = Z.filter((z) => touchT(u, z.T, z.bb)).map((z) => z.k); const pa = Math.abs(dot(u.n, L));
-      if (u.plate && pa > P.ANG_PAR && u.width >= P.DW_MIN_W && u.tz.length >= 1) u.cls = "dwars?"; else if (u.plate && pa < P.ANG_PERP && u.tz.length >= 2) u.cls = "langs?"; else u.cls = "overig"; });
+      if (u.plate && pa > P.ANG_PAR && u.width >= P.DW_MIN_W && u.tz.length >= 1) u.cls = "dwars?"; else if (u.plate && pa < P.ANG_PERP && u.width >= P.DW_MIN_W && u.tz.length >= 2) u.cls = "langs?"; else u.cls = "overig"; });
     const DSall = []; U.filter((u) => u.cls === "dwars?").sort((a, b) => dot(a.c, L) - dot(b.c, L)).forEach((u) => { const s = dot(u.c, L), d = DSall[DSall.length - 1]; if (d && s - d.last <= P.SCHOT_POS) { d.els.push(u); d.last = s; } else DSall.push({ s, last: s, els: [u] }); });
     DSall.forEach((d) => { d.tz = [...new Set(d.els.flatMap((u) => u.tz))].sort((a, b) => a - b); const opp = d.tz.some((a) => d.tz.some((b) => dot(Z[a - 1].n, Z[b - 1].n) < -P.ZICHT_COS));
       d.ok = d.tz.length >= 3 || opp; d.why = d.tz.length >= 3 ? "≥ 3 zichten" : opp ? "tussen 2 tegenoverliggende zichten" : ""; d.els.forEach((u) => { u.cls = d.ok ? "dwarsschot" : "overig"; }); });
@@ -179,11 +190,20 @@
     const LSok = LS.filter((g) => g.ok); LSok.forEach((g, i) => { g.k = i + 1; g.els.forEach((u) => { u.langs = g; }); });
     U.forEach((u) => { u.klasse = u.huid ? "huid" : u.cls === "dwarsschot" ? "dwarsschot" : u.cls === "langsschot" ? "langsschot" : "overig"; });
 
+    // 5. ouder per detail: rechtstreeks contact met zicht > dwarsschot > langsschot, anders via andere details
+    const rank = (u) => (u.klasse === "huid" ? 0 : u.klasse === "dwarsschot" ? 1 : u.klasse === "langsschot" ? 2 : 9);
+    const det = U.filter((u) => u.klasse === "overig"), main = U.filter((u) => rank(u) < 9);
+    const nb = new Map(); det.forEach((u) => nb.set(u, U.filter((o) => o !== u && ovl(u.bb, o.bb, P.TOL))));
+    det.forEach((u) => { let best = null; for (const o of nb.get(u)) { if (rank(o) === 9 || (best && rank(o) >= rank(best))) continue; if (touchU(u, o)) best = o; } if (best) u.parent = best; });
+    for (let it = 0, changed = true; changed && it < 12; it++) { changed = false;
+      det.forEach((u) => { if (u.parent) return; for (const o of nb.get(u)) { if (o.klasse !== "overig" || !o.parent) continue; if (touchU(u, o)) { u.parent = o.parent; changed = true; break; } } }); }
+    void main;
     // waarschuwingen
     const warn = [];
     const dem = U.filter((u) => u.demoted); if (dem.length) warn.push(`${dem.length} stuk(ken) in de buitenhuid vormen een vlak korter dan 25 % van de lengte (goot, lokale uitsparing): niet als zicht geteld.`);
     const part = DS.filter((d) => d.tz.length <= 3 && d.els.length <= 2 && DS.some((o) => o !== d && Math.abs(o.s - d.s) <= 200)); if (part.length) warn.push(`${part.length} dwarsschot(ten) ligt/liggen op minder dan 200 mm van een ander schot en raakt maar een deel van de huid (${part.map((d) => "S" + d.k).join(", ")}): mogelijk een verspringend schot.`);
     if (!SL.valid) warn.push("Geen enkele doorsnede is gesloten: de huid is enkel met stralen bepaald. Controleer de zichten.");
+    const openZ = Z.filter((z) => z.open || z.deelsOpen); if (openZ.length) warn.push(`${openZ.length} zicht(en) bevat(ten) een enkelwandige huidplaat (aan beide kanten buitenlucht, ≥ 1 000 mm breed): ${openZ.map((z) => z.label).join(", ")}. Controleer of dit echt huid is en geen platform of console.`);
     if (!Z.length) warn.push("Geen zichten gevonden: is dit een koker? Open profielen (I-liggers, U-troggen) hebben geen gesloten huid.");
     return { version: VERSION, P, U, Z, DS, TY, LS: LSok, box, L, Llen, slicesValid: SL.valid, slicesN: P.SLICES, warn };
   }
