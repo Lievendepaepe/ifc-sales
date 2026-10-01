@@ -48,6 +48,9 @@
   .kpis span{display:block;font-size:12px;color:var(--muted)}
   details summary{cursor:pointer;font-size:13px;color:var(--steel);margin:6px 0}
   .sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+  .leg{display:flex;flex-wrap:wrap;gap:4px 12px;margin:8px 0;font-size:12.5px}
+  .leg label{display:flex;align-items:center;gap:4px;cursor:pointer}
+  tr[data-pick]{cursor:pointer} tr[data-pick]:hover td{background:var(--panel)}
   .empty{background:var(--panel);padding:10px;border-radius:4px;font-size:13px;color:var(--muted)}
 </style>
 </head>
@@ -83,6 +86,11 @@
       <button id="btnReset">Kleuren wissen</button>
       <button id="btnAdd" disabled>Toevoegen aan project</button>
     </div>
+    <div class="row">
+      <label>Explosietekening <select id="expMode"><option value="all">Volledig berekend deel</option><option value="vis">Enkel wat zichtbaar is in de viewer</option></select></label>
+      <button id="btnExpOpen" disabled>Openen</button>
+      <button id="btnExpSave" disabled>Downloaden (.html)</button>
+    </div>
     <p class="meta" id="runStatus"></p>
     <div class="err-box" id="err2"></div>
     <div id="result"></div>
@@ -105,6 +113,7 @@
       <button class="primary" id="btnSave">Nacalculatie opslaan</button>
       <button id="btnClearProj">Project leegmaken</button>
     </div>
+    <div class="row"><label><input type="checkbox" id="autoBackup" checked> Na opslaan meteen een back-up van de kalibratie downloaden</label></div>
     <div class="err-box" id="err3"></div>
     <p class="meta" id="saveStatus"></p>
   </section>
@@ -127,6 +136,7 @@
 <script src="vlakken.js"></script>
 <script src="kalibratie.js"></script>
 <script src="rapport.js"></script>
+<script src="explosie.js"></script>
 <script>
 "use strict";
 const WEBIFC_CDN = "https://cdn.jsdelivr.net/npm/web-ifc@0.0.66/";
@@ -348,6 +358,7 @@ async function preview() {
   if (!S.api) { showErr("err1", "Niet verbonden met Trimble Connect."); return; }
   const btn = $("btnPreview"); btn.disabled = true;
   try {
+    await restoreHidden();
     const ms = await visibleModels(), scope = $("scope").value, rows = [];
     for (const m of ms) {
       const mm = await openModel(m); runStatus(`Omvang bepalen: ${mm.name}…`); await sleep(10);
@@ -368,8 +379,9 @@ async function preview() {
 async function run() {
   showErr("err2", ""); $("result").innerHTML = "";
   if (!S.api) { showErr("err2", "Niet verbonden met Trimble Connect."); return; }
-  const btn = $("btnRun"); btn.disabled = true; $("btnPdf").disabled = $("btnColor").disabled = $("btnAdd").disabled = true;
+  const btn = $("btnRun"); btn.disabled = true; $("btnPdf").disabled = $("btnColor").disabled = $("btnAdd").disabled = $("btnExpOpen").disabled = $("btnExpSave").disabled = true;
   try {
+    await restoreHidden();
     const ms = await visibleModels(), scope = $("scope").value, parts = [];
     for (const m of ms) {
       const mm = await openModel(m); runStatus(`Omvang bepalen: ${mm.name}…`); await sleep(10);
@@ -385,7 +397,7 @@ async function run() {
     if (!parts.length) throw new Error("Niets in de omvang: alles verborgen of weggeknipt?");
     const lab = $("label").value.trim(); if (lab && parts.length === 1) parts[0].label = lab; else if (lab) parts.forEach((p) => { p.label = `${lab} – ${p.label}`; });
     S.last = parts; runStatus(`Klaar: ${parts.length} deel/delen.`); renderResult(parts);
-    $("btnPdf").disabled = $("btnColor").disabled = $("btnAdd").disabled = false;
+    $("btnPdf").disabled = $("btnColor").disabled = $("btnAdd").disabled = $("btnExpOpen").disabled = $("btnExpSave").disabled = false;
   } catch (e) { showErr("err2", errMsg(e)); runStatus(""); }
   finally { btn.disabled = false; }
 }
@@ -424,11 +436,16 @@ function predText(pr) {
 function renderResult(parts) {
   const rows = parts.map((p) => { const pr = Kalibratie.predict([partFeat(p)]), tx = predText(pr); p.Rk = tx.sam; p.Uk = tx.uren;
     return `<tr><td>${esc(p.label)}</td><td>${fmt(p.dims[0], 0)} × ${fmt(p.dims[1], 0)} × ${fmt(p.dims[2], 0)}</td><td>${fmt(p.t, 1)}</td><td>${fmt(p.A, 1)}</td><td>${fmt(p.V, 2)}</td><td>${p.parts}</td><td>${p.M}</td><td>${p.Z}</td><td>${p.nDS} / ${p.T}</td><td>${p.L}</td><td>${p.R}</td><td>${tx.sam}</td><td>${tx.uren}</td></tr>`; }).join("");
-  const det = parts.map((p) => `<details><summary>${esc(p.label)}: zichten, schotten, waarschuwingen</summary>
-    <div class="scroll"><table><tr><th>Zicht</th><th class="l">Stand</th><th>Platen</th><th class="l">Naam in IFC</th></tr>${p.r.Z.map((z) => `<tr><td><span class="sw" style="background:${Rapport.ZCOL[(z.k - 1) % Rapport.ZCOL.length]}"></span>Z${z.k}</td><td class="l">${z.orient}</td><td>${z.els.length}</td><td class="l">${esc(z.names)}</td></tr>`).join("")}</table></div>
-    <div class="scroll"><table><tr><th>Schot</th><th>Positie (mm)</th><th>Type</th><th>Platen</th><th class="l">Raakt</th></tr>${p.r.DS.map((d) => `<tr><td>S${d.k}</td><td>${fmt(d.s - p.r.DS[0].s, 0)}</td><td>T${d.type}</td><td>${d.els.length}</td><td class="l">${d.tz.map((k) => "Z" + k).join(" ")}</td></tr>`).join("")}</table></div>
+  const keysOf = (p) => p.r.Z.map((z) => ["Z" + z.k, "Z" + z.k, Rapport.ZCOL[(z.k - 1) % Rapport.ZCOL.length]]).concat([["dwarsschot", "Dwarsschotten", Rapport.COL.dwarsschot], ["langsschot", "Langsschotten", Rapport.COL.langsschot], ["overig", "Overig", Rapport.COL.overig]]);
+  const leg = parts.map((p, pi) => `<div class="meta">${esc(p.label)}: tonen in de viewer</div><div class="leg">${keysOf(p).map(([k, t, c]) => `<label><input type="checkbox" data-vis="${pi}|${k}" checked><span class="sw" style="background:${c}"></span>${t} <span class="meta">(${unitsOf(p, k).length})</span></label>`).join("")}<button data-showall="${pi}">Alles tonen</button></div>`).join("");
+  const det = parts.map((p, pi) => `<details><summary>${esc(p.label)}: zichten, schotten, waarschuwingen</summary><div class="meta">Klik op een rij om die platen in de viewer te selecteren en in te zoomen.</div>
+    <div class="scroll"><table><tr><th>Zicht</th><th class="l">Stand</th><th>Platen</th><th class="l">Naam in IFC</th></tr>${p.r.Z.map((z) => `<tr data-pick="${pi}|Z${z.k}"><td><span class="sw" style="background:${Rapport.ZCOL[(z.k - 1) % Rapport.ZCOL.length]}"></span>Z${z.k}</td><td class="l">${z.orient}</td><td>${z.els.length}</td><td class="l">${esc(z.names)}</td></tr>`).join("")}</table></div>
+    <div class="scroll"><table><tr><th>Schot</th><th>Positie (mm)</th><th>Type</th><th>Platen</th><th class="l">Raakt</th></tr>${p.r.DS.map((d) => `<tr data-pick="${pi}|S${d.k}"><td>S${d.k}</td><td>${fmt(d.s - p.r.DS[0].s, 0)}</td><td>T${d.type}</td><td>${d.els.length}</td><td class="l">${d.tz.map((k) => "Z" + k).join(" ")}</td></tr>`).join("")}</table></div>
     ${p.warn.map((w) => `<div class="warn-box">${esc(w)}</div>`).join("")}</details>`).join("");
-  $("result").innerHTML = `<div class="scroll"><table><tr><th>Deel</th><th>L × B × H (mm)</th><th>Ton</th><th>m²</th><th>m³</th><th>Onderd.</th><th>Mono</th><th>Zichten</th><th>Schotten / types</th><th>Langs</th><th>Samenstel (regels)</th><th>Samenstel (gekal.)</th><th>Uren</th></tr>${rows}</table></div>${det}`;
+  $("result").innerHTML = `<div class="scroll"><table><tr><th>Deel</th><th>L × B × H (mm)</th><th>Ton</th><th>m²</th><th>m³</th><th>Onderd.</th><th>Mono</th><th>Zichten</th><th>Schotten / types</th><th>Langs</th><th>Samenstel (regels)</th><th>Samenstel (gekal.)</th><th>Uren</th></tr>${rows}</table></div>${leg}${det}`;
+  $("result").querySelectorAll("[data-vis]").forEach((c) => c.addEventListener("change", () => { const [pi, k] = c.dataset.vis.split("|"); setVisible(parts[Number(pi)], k, c.checked); }));
+  $("result").querySelectorAll("[data-showall]").forEach((b) => b.addEventListener("click", async () => { await restoreHidden(); $("result").querySelectorAll(`[data-vis^="${b.dataset.showall}|"]`).forEach((c) => { c.checked = true; }); }));
+  $("result").querySelectorAll("[data-pick]").forEach((tr) => tr.addEventListener("click", () => { const [pi, k] = tr.dataset.pick.split("|"); pick(parts[Number(pi)], k); }));
 }
 
 /* ---------- Rapport en kleuren ---------- */
@@ -460,6 +477,57 @@ async function colorize() {
     }
     runStatus("Ingekleurd: zichten in blauw/groen, dwarsschotten oranje, langsschotten paars.");
   } catch (e) { showErr("err2", "Inkleuren mislukt: " + errMsg(e)); }
+}
+// eenheden per sleutel: Z1…Zn, S1…Sn, dwarsschot, langsschot, overig
+function unitsOf(p, k) {
+  if (/^Z\d+$/.test(k)) return p.r.U.filter((u) => u.huid && u.zicht && "Z" + u.zicht.k === k);
+  if (/^S\d+$/.test(k)) return p.r.U.filter((u) => u.schot && "S" + u.schot.k === k);
+  return p.r.U.filter((u) => u.klasse === k);
+}
+const ridsOf = (p, units) => units.flatMap((u) => u.ids.map((id) => p.exprToRt.get(id)).filter((x) => x != null));
+// verborgen door de app: bijhouden, zodat de omvang "zichtbaar" er niet door verandert
+S.hidden = new Map();
+async function setVisible(p, k, v) {
+  const rids = ridsOf(p, unitsOf(p, k)); if (!rids.length) return;
+  try {
+    await S.api.viewer.setObjectState({ modelObjectIds: [{ modelId: p.modelId, objectRuntimeIds: rids }] }, { visible: v });
+    const set = S.hidden.get(p.modelId) || new Set(); rids.forEach((r) => (v ? set.delete(r) : set.add(r))); S.hidden.set(p.modelId, set);
+  } catch (e) { showErr("err2", "Tonen/verbergen mislukt: " + errMsg(e)); }
+}
+async function restoreHidden() {
+  for (const [modelId, set] of S.hidden) { if (!set.size) continue; try { await S.api.viewer.setObjectState({ modelObjectIds: [{ modelId, objectRuntimeIds: [...set] }] }, { visible: true }); } catch (e) { /* */ } }
+  S.hidden = new Map();
+}
+async function pick(p, k) {
+  const rids = ridsOf(p, unitsOf(p, k)); if (!rids.length) return;
+  const sel = { modelObjectIds: [{ modelId: p.modelId, objectRuntimeIds: rids }] };
+  try { await S.api.viewer.setSelection(sel, "set"); await S.api.viewer.setCamera(sel, { animationTime: 300 }); } catch (e) { showErr("err2", "Selecteren mislukt: " + errMsg(e)); }
+}
+/* ---------- Explosietekening ---------- */
+async function explosionHtml() {
+  const mode = $("expMode").value, parts = S.last.map((p) => ({ label: p.label, r: p.r }));
+  if (mode === "vis") {
+    let groups = []; try { groups = (await S.api.viewer.getObjects(undefined, { visible: true })) || []; } catch (e) { throw new Error("Trimble gaf de zichtbare objecten niet terug: " + errMsg(e)); }
+    S.last.forEach((p, i) => {
+      const vis = new Set(); groups.filter((g) => g.modelId === p.modelId).forEach((g) => (g.objects || []).forEach((o) => vis.add(o.id)));
+      parts[i].keep = new Set(p.r.U.filter((u) => u.ids.some((id) => vis.has(p.exprToRt.get(id)))));
+    });
+  }
+  const title = $("label").value.trim() || S.last.map((p) => p.label).join(" + ");
+  const sub = mode === "vis" ? "Enkel de platen die zichtbaar waren in de viewer." : "Volledig berekend deel.";
+  return { html: Explosie.html(parts, title, sub), title };
+}
+async function openExplosion(download) {
+  if (!S.last) return; showErr("err2", "");
+  const b1 = $("btnExpOpen"), b2 = $("btnExpSave"); b1.disabled = b2.disabled = true;
+  try {
+    runStatus("Explosietekening opbouwen…"); await sleep(20);
+    const { html, title } = await explosionHtml(), url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    if (download) { const a = document.createElement("a"); a.href = url; a.download = `Explosie_${title.replace(/[^\w.-]+/g, "_")}.html`; document.body.appendChild(a); a.click(); a.remove(); runStatus("Explosietekening gedownload. Zip ze voor je ze mailt."); }
+    else { const w = window.open(url, "_blank"); runStatus(w ? "Explosietekening geopend in een nieuw tabblad." : ""); if (!w) showErr("err2", "Het nieuwe tabblad werd geblokkeerd door de browser. Sta pop-ups toe voor Trimble Connect, of gebruik Downloaden."); }
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (e) { showErr("err2", errMsg(e)); runStatus(""); }
+  finally { b1.disabled = b2.disabled = false; }
 }
 async function resetColors() { try { await S.api.viewer.setObjectState(undefined, { color: "reset" }); } catch (e) { showErr("err2", errMsg(e)); } }
 
@@ -495,7 +563,7 @@ function saveNacalc() {
   const sum = list.reduce((s, p) => s + p.t, 0), dev = Math.abs(sum - ton) / ton;
   if (dev > 0.02) { showErr("err3", `De ingeladen delen wegen ${fmt(sum, 1)} t, het project ${fmt(ton, 1)} t (${fmt(dev * 100, 1)} % verschil). Ontbreekt er een deel, of telt er een deel dubbel? Niet opgeslagen.`); return; }
   Kalibratie.addProject({ naam: name, ton, uren: uren > 0 ? uren : null, samenstel: sam > 0 ? sam : null, mono: mono > 0 ? mono : null, parts: list, rulesVersion: Vlakken.VERSION });
-  $("saveStatus").textContent = `Nacalculatie "${name}" opgeslagen. Exporteer de kalibratie als back-up.`; renderCalib(); renderProject();
+  $("saveStatus").textContent = `Nacalculatie "${name}" opgeslagen.` + ($("autoBackup").checked ? " Back-up gedownload." : " Exporteer de kalibratie als back-up."); renderCalib(); renderProject(); if ($("autoBackup").checked) exportCalib();
 }
 function renderCalib() {
   const db = Kalibratie.load(), m = Kalibratie.model();
@@ -524,6 +592,8 @@ $("btnPdf").addEventListener("click", makePdf);
 $("btnColor").addEventListener("click", colorize);
 $("btnReset").addEventListener("click", resetColors);
 $("btnAdd").addEventListener("click", addToProject);
+$("btnExpOpen").addEventListener("click", () => openExplosion(false));
+$("btnExpSave").addEventListener("click", () => openExplosion(true));
 $("btnSave").addEventListener("click", saveNacalc);
 $("btnClearProj").addEventListener("click", () => { if (confirm("Alle delen uit het huidige project verwijderen? De kalibratie blijft bewaard.")) { projSave([]); renderProject(); } });
 $("btnExport").addEventListener("click", exportCalib);
