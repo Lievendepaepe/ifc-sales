@@ -61,7 +61,24 @@
   <div id="status">Verbinden…</div>
 
   <section>
-    <h2><span class="n">1</span>Omvang</h2>
+    <h2><span class="n">1</span>Salesmeetstaat + Salesmonotek</h2>
+    <p class="muted">Meetstaat in Excel (per positie, platen per dikte) en monotekeningen in PDF (A3, 9 stukken per blad, gelijke stukken één keer, met hoofdafmetingen). Bouten en deuvels tellen niet mee. Meerdere zichtbare IFC's komen samen in één meetstaat.</p>
+    <div class="row">
+      <label>Omvang <select id="slScope">
+        <option value="all">Volledige zichtbare modellen</option>
+        <option value="vis">Zichtbaar in de viewer, binnen de doorsnedevlakken</option></select></label>
+    </div>
+    <p class="meta">Bij doorsnedevlakken geldt de kant uit stap 2 ("Kant van de doorsnedevlakken omkeren").</p>
+    <div class="row">
+      <button class="primary" id="btnSlXlsx">Salesmeetstaat (Excel)</button>
+      <button class="primary" id="btnSlPdf">Salesmonotek (PDF)</button>
+    </div>
+    <p class="meta" id="slStatus"></p>
+    <div class="err-box" id="slErr"></div>
+  </section>
+
+  <section>
+    <h2><span class="n">2</span>Omvang</h2>
     <p class="muted">Zet in Trimble de oogjes aan bij de IFC's die meetellen. Verberg wat niet meetelt, of knip met doorsnedevlakken (geen doorsnedebox). Onderdelen tellen volledig mee aan de kant van hun zwaartepunt: zet de vlakken dus op de voeg tussen twee moten.</p>
     <div class="row">
       <label>Omvang <select id="scope">
@@ -78,7 +95,7 @@
   </section>
 
   <section>
-    <h2><span class="n">2</span>Berekenen</h2>
+    <h2><span class="n">3</span>Berekenen</h2>
     <div class="row">
       <button class="primary" id="btnRun">Berekenen</button>
       <button id="btnPdf" disabled>Rapport A3 (PDF)</button>
@@ -97,7 +114,7 @@
   </section>
 
   <section>
-    <h2><span class="n">3</span>Project en nacalculatie</h2>
+    <h2><span class="n">4</span>Project en nacalculatie</h2>
     <p class="muted">Voeg alle moten of IFC's van een project toe. De schatting geldt voor het hele project. Ken je de werkelijke cijfers, vul ze in en sla ze op: de volgende schatting leert daarvan.</p>
     <div id="project"></div>
     <div class="row">
@@ -119,7 +136,7 @@
   </section>
 
   <section>
-    <h2><span class="n">4</span>Kalibratie</h2>
+    <h2><span class="n">5</span>Kalibratie</h2>
     <p class="muted">Bewaard in deze browser. Exporteer regelmatig een back-up; bij een nieuwe pc of gewiste browsergegevens importeer je die opnieuw.</p>
     <div id="calib"></div>
     <div class="row">
@@ -137,9 +154,11 @@
 <script src="kalibratie.js"></script>
 <script src="rapport.js"></script>
 <script src="explosie.js"></script>
+<script src="sales.js"></script>
 <script>
 "use strict";
 const WEBIFC_CDN = "https://cdn.jsdelivr.net/npm/web-ifc@0.0.66/";
+const EXCELJS_CDN = "https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js";
 const JSPDF_CDN = "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js";
 const TC_HOSTS = ["https://app21.connect.trimble.com", "https://app.connect.trimble.com", "https://app31.connect.trimble.com", "https://app32.connect.trimble.com"];
 const PROJ_KEY = "ifcSales.project.v1";
@@ -247,7 +266,18 @@ function psetsOf(mm) {
   }
   const ag = api.GetLineIDsWithType(mid, WebIFC.IFCRELAGGREGATES);
   for (let i = 0; i < ag.size(); i++) { let r; try { r = api.GetLine(mid, ag.get(i)); } catch (e) { continue; } (r.RelatedObjects || []).forEach((o) => parent.set(o.value, r.RelatingObject && r.RelatingObject.value)); }
-  mm.psets = { ps, parent }; return mm.psets;
+  // materiaal per onderdeel (voor de salesmeetstaat)
+  const mats = new Map(), mr = api.GetLineIDsWithType(mid, WebIFC.IFCRELASSOCIATESMATERIAL);
+  for (let i = 0; i < mr.size(); i++) {
+    let r, m; try { r = api.GetLine(mid, mr.get(i)); m = api.GetLine(mid, r.RelatingMaterial.value); } catch (e) { continue; }
+    let name = m.Name && m.Name.value;
+    try {
+      if (!name && m.ForLayerSet) { const ls = api.GetLine(mid, m.ForLayerSet.value); const ly = api.GetLine(mid, ls.MaterialLayers[0].value); name = api.GetLine(mid, ly.Material.value).Name.value; }
+      if (!name && m.Materials) name = api.GetLine(mid, m.Materials[0].value).Name.value;
+    } catch (e) { /* */ }
+    if (name) (r.RelatedObjects || []).forEach((o) => { if (!mats.has(o.value)) mats.set(o.value, String(name).replace(/^STEEL\//i, "")); });
+  }
+  mm.psets = { ps, parent, mats }; return mm.psets;
 }
 // objecten van een model in de viewer (zichtbaar of alle) → express-id's, met runtime-id's voor het inkleuren
 async function viewerObjects(mm, onlyVisible) {
@@ -414,9 +444,9 @@ function summarize(mm, sc, r, els, scope) {
     if (hasA) { u.A = a; nTek++; } else if (bad && tOf(u.prof)) { u.A = 2 * w / 7.85e-6 / tOf(u.prof) / 1e6; nFix++; } else u.A = ma / 1e6;
     W += w; A += u.A;
     const vb = by.get(u.ids[0]).ps.VBSC || {};
-    // monotekening: gelijke stukken één keer (Tekla-positie als die bestaat, anders geometrie)
-    const pos = vb.PART_POS || (by.get(u.ids[0]).ps["Tekla Common"] || {})["Part position"];
-    mono.add(pos && !u.formed ? "P|" + pos : [u.prof, vb.MATERIAL, u.formed ? vb["ontvouwing breedte"] : vb.LENGTH, w.toFixed(1), u.dims.map(Math.round).sort((x, y) => x - y).join("x")].join("|")); });
+    // monotekening: zelfde sleutel als de salesmonotek in stap 1
+    mono.add(monoKey({ ontv: u.formed && vb["ontvouwing nummer"] ? String(vb["ontvouwing nummer"]).trim() : "", pos: vb.PART_POS || (by.get(u.ids[0]).ps["Tekla Common"] || {})["Part position"],
+      prof: u.prof, mat: vb.MATERIAL, L: vb.LENGTH, W: w, tris: u.tris })); });
   const warn = r.warn.slice();
   if (!nPos) warn.unshift("Geen Tekla-nummering (PART_POS) in het IFC: monotekeningen ontdubbeld op geometrie. Gespiegelde stukken tellen als gelijk.");
   if (nTek < r.U.length) warn.push(`Oppervlakte: ${nTek} van ${r.U.length} onderdelen uit Tekla Net surface area, de rest uit de geometrie${nFix ? `; ${nFix} met kapotte geometrie geschat uit het gewicht` : ""}.`);
@@ -446,6 +476,168 @@ function renderResult(parts) {
   $("result").querySelectorAll("[data-vis]").forEach((c) => c.addEventListener("change", () => { const [pi, k] = c.dataset.vis.split("|"); setVisible(parts[Number(pi)], k, c.checked); }));
   $("result").querySelectorAll("[data-showall]").forEach((b) => b.addEventListener("click", async () => { await restoreHidden(); $("result").querySelectorAll(`[data-vis^="${b.dataset.showall}|"]`).forEach((c) => { c.checked = true; }); }));
   $("result").querySelectorAll("[data-pick]").forEach((tr) => tr.addEventListener("click", () => { const [pi, k] = tr.dataset.pick.split("|"); pick(parts[Number(pi)], k); }));
+}
+
+/* ---------- Monotekeningen: één sleutel voor stap 1 en stap 3 ---------- */
+// Gelijke stukken = één monotekening. Gevormde plaat: ontvouwingsnummer. Genummerd onderdeel: Tekla-positie.
+// Zonder nummering: geometrisch (profiel, materiaal, lengte, gewicht op 0,1 kg, afmetingen langs de hoofdassen op 1 mm).
+function pcaDims(tris) {
+  const ps = []; tris.forEach((t) => t.forEach((p) => ps.push(p)));
+  const c = [0, 1, 2].map((i) => ps.reduce((s, p) => s + p[i], 0) / ps.length), C = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (const p of ps) { const d = [p[0] - c[0], p[1] - c[1], p[2] - c[2]]; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) C[i][j] += d[i] * d[j]; }
+  return IfcGeom.eig3(C).map((x) => { let lo = Infinity, hi = -Infinity; for (const p of ps) { const v = p[0] * x.vec[0] + p[1] * x.vec[1] + p[2] * x.vec[2]; if (v < lo) lo = v; if (v > hi) hi = v; } return hi - lo; });
+}
+function monoKey(o) {
+  if (o.ontv) return "F|" + o.ontv;
+  if (o.pos) return "P|" + o.pos;
+  return "G|" + [String(o.prof || "").replace(/^PL/i, "PL"), o.mat || "", Math.round(Number(o.L) || 0), (Number(o.W) || 0).toFixed(1), pcaDims(o.tris).map(Math.round).sort((x, y) => x - y).join("x")].join("|");
+}
+
+/* ---------- Stap 1: Salesmeetstaat + Salesmonotek (overgenomen uit locale-as stap 9) ---------- */
+function slError(msg) { const el = $("slErr"); el.textContent = msg || ""; el.style.display = msg ? "block" : "none"; }
+function slStatus(msg) { $("slStatus").textContent = msg || ""; }
+function download(name, data, type) {
+  const url = URL.createObjectURL(new Blob([data], { type })), a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+const SL_TYPE = { IfcPlate: "Plaat", IfcBeam: "Balk", IfcMember: "Staaf", IfcColumn: "Kolom" };
+function numOrNull(v) { const n = Number(v); return v != null && v !== "" && Number.isFinite(n) ? n : null; }
+const v3sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], v3dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const v3cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
+// Meetstaatregels per positie voor één model binnen de omvang (sc uit scopeOf)
+function salesCollect(mm, sc) {
+  const api = mm.api, mid = mm.modelID, { ps, mats, parent } = psetsOf(mm);
+  let nGeo = 0;
+  const parts = sc.ids.map((id) => {
+    const tris = sc.geo.get(id), type = (mm.index.info.get(id) || {}).type || "";
+    let l = {}; try { l = api.GetLine(mid, id); } catch (x) { /* */ }
+    const p = ps.get(id) || {}, vb = p.VBSC || {}, tq = p["Tekla Quantity"] || {}, tc = p["Tekla Common"] || {};
+    const prof = (l.Description && l.Description.value) || (l.ObjectType && l.ObjectType.value) || "";
+    let L = numOrNull(vb.LENGTH) ?? numOrNull(tq.Length), W = numOrNull(vb.WEIGHT) ?? numOrNull(tq.Weight), A = numOrNull(tq["Net surface area"]) ?? numOrNull(vb.AREA_NET);
+    if (L == null || W == null || A == null) {
+      // terugval op de geometrie: oppervlakte, volume × 7850 kg/m³, lengte langs de hoofdas
+      nGeo++;
+      let ar = 0, vol = 0; for (const t of tris) { const c = v3cross(v3sub(t[1], t[0]), v3sub(t[2], t[0])); ar += Math.hypot(c[0], c[1], c[2]) / 2; vol += v3dot(t[0], v3cross(t[1], t[2])) / 6; }
+      if (A == null) A = ar / 1e6; if (W == null) W = Math.abs(vol) * 7.85e-6;
+      if (L == null) { const tb = Transport.boxMin(Transport.uniquePoints([].concat(...tris)), []); L = Math.max(...tb.dims); }
+    }
+    const ontv = vb["ontvouwing nummer"] ? String(vb["ontvouwing nummer"]).trim() : "";
+    const tpos = vb.PART_POS || tc["Part position"] || "";
+    return { id, tris, tpos: tpos ? String(tpos) : "", vbMat: vb.MATERIAL, vbL: vb.LENGTH, tag: (l.Tag && l.Tag.value) || "", pos: String(tpos || (l.Tag && l.Tag.value) || `#${id}`), name: (l.Name && l.Name.value) || "",
+      typ: SL_TYPE[type] || type.replace(/^Ifc/, ""), prof, mat: mats.get(id) || "", L, W, A,
+      ontv, ontvL: numOrNull(vb["ontvouwing breedte"]), ontvP: vb["ontvouwing dikte"] ? String(vb["ontvouwing dikte"]) : "", asm: parent.get(id) };
+  });
+  // Gevormde (gezette/gebogen) platen: segmenten met hetzelfde ontvouwingsnummer in dezelfde samenbouw vormen één stuk.
+  const formedInst = new Map(), plain = [];
+  parts.forEach((q) => {
+    if (!q.ontv) { plain.push(q); return; }
+    const k = q.ontv + "|" + (q.asm ?? "-"); const l = formedInst.get(k); if (l) l.push(q); else formedInst.set(k, [q]);
+  });
+  const formed = [];
+  formedInst.forEach((segs) => {
+    if (segs.length < 2) { segs.forEach((q) => { q.note1 = `heeft ontvouwingsgegevens (${q.ontv}) maar is het enige segment: als los stuk geteld`; plain.push(q); }); return; }
+    const q0 = segs.find((q) => !/^ID/i.test(q.pos)) || segs[0], sp = Sales.splitProfile(q0.ontvP);
+    const joint = Sales.jointArea(segs.map((q) => q.tris)) / 1e6;
+    formed.push({ ...q0, pos: q0.ontv, typ: "Plaat (gevormd)", prof: q0.ontvP || q0.prof, L: q0.ontvL ?? q0.L,
+      W: segs.reduce((s, q) => s + q.W, 0), A: Math.max(0, segs.reduce((s, q) => s + q.A, 0) - joint),
+      tris: [].concat(...segs.map((q) => q.tris)), segments: segs.length, joint, formedB: sp.b });
+  });
+  // gelijke stukken samen: Tekla-positie, ontvouwingsnummer, of zonder nummering geometrisch
+  const byKey = new Map(); let nGeoKey = 0;
+  plain.concat(formed).forEach((q) => {
+    const k = monoKey({ ontv: q.segments ? q.ontv : "", pos: q.segments ? "" : q.tpos, prof: q.prof, mat: q.vbMat, L: q.vbL, W: q.W, tris: q.tris });
+    if (k[0] === "G") nGeoKey++;
+    const l = byKey.get(k); if (l) l.push(q); else byKey.set(k, [q]);
+  });
+  let gNo = 0;
+  const rows = [...byKey.entries()].map(([key, l]) => {
+    const pos = key[0] === "G" ? `G${++gNo}` : l[0].pos;
+    const q = l[0], sp = Sales.splitProfile(q.prof), mean = (k) => l.reduce((s, x) => s + x[k], 0) / l.length;
+    const dl = Math.max(...l.map((x) => x.L)) - Math.min(...l.map((x) => x.L)), dw = Math.max(...l.map((x) => x.W)) - Math.min(...l.map((x) => x.W));
+    const notes = [];
+    if (dl > 0.05 || dw > 0.05) notes.push(`kleine verschillen tussen stukken (max. ${fmt(dl, 1)} mm / ${fmt(dw, 2)} kg): gemiddelde waarden`);
+    if (sp.t == null) notes.push("ander profiel: dikte/breedte niet ingevuld");
+    if (q.segments) notes.push(`gevormde plaat uit ${q.segments} segmenten; dikte, breedte en lengte = uitslag volgens Tekla (ontvouwing); oppervlakte = som segmenten min ${fmt(q.joint, 2)} m² naden`);
+    if (q.note1) notes.push(q.note1);
+    if (key[0] === "G") { const tags = [...new Set(l.map((x) => x.tag).filter((t) => t && !/^ID[0-9a-f-]{20,}$/i.test(t)))]; notes.push("geen Tekla-positie: gelijke stukken geometrisch ontdubbeld" + (tags.length ? ` (merk ${tags.slice(0, 5).join(", ")}${tags.length > 5 ? ", …" : ""})` : "")); }
+    return { pos, name: q.name, typ: q.typ, grp: sp.grp, t: sp.t, b: sp.b, mat: q.mat, n: l.length, L: mean("L"), W: mean("W"), A: mean("A"), note: notes.join("; "), tris: q.tris,
+      segments: q.segments || 0, formed: q.segments ? { L: q.L, b: sp.b } : null, src: mm.name };
+  });
+  return { rows, nParts: parts.length, nGeo, nFormed: formed.length, nGeoKey };
+}
+// Zelfde positie in meerdere IFC's: samentellen als profiel, materiaal, lengte (±1 mm) en gewicht (±0,5 %) overeenkomen; anders apart met de IFC-naam.
+function mergeSalesRows(rows, multi) {
+  const by = new Map(), out = [];
+  const same = (o, r) => o.grp === r.grp && o.t === r.t && o.b === r.b && o.mat === r.mat && Math.abs(o.L - r.L) <= 1 && Math.abs(o.W - r.W) <= Math.max(0.1, 0.005 * o.W);
+  for (const r of rows) {
+    const o = by.get(r.pos);
+    if (o && same(o, r)) { const n = o.n + r.n; ["L", "W", "A"].forEach((k) => { o[k] = (o[k] * o.n + r[k] * r.n) / n; }); o.n = n; o.srcs.add(r.src); }
+    else if (o) out.push({ ...r, pos: `${r.pos} [${r.src.replace(/\.ifc$/i, "")}]`, srcs: new Set([r.src]), note: [r.note, `positie ${r.pos} bestaat ook in ${[...o.srcs].join(", ")} met andere afmetingen of gewicht: apart gehouden`].filter(Boolean).join("; ") });
+    else { const c = { ...r, srcs: new Set([r.src]) }; by.set(r.pos, c); out.push(c); }
+  }
+  if (multi) out.forEach((r) => { r.note = [r.note, `uit ${[...r.srcs].map((x) => x.replace(/\.ifc$/i, "")).join(" + ")}`].filter(Boolean).join("; "); });
+  out.sort((a, b) => Sales.cmpGroup(a.grp, b.grp) || Sales.natKey(a.pos).localeCompare(Sales.natKey(b.pos)));
+  return out;
+}
+async function salesPrepare() {
+  slError("");
+  if (!S.api) throw new Error("Niet verbonden met Trimble Connect.");
+  await restoreHidden();
+  const scope = $("slScope").value, ms = await visibleModels(), all = [], names = [];
+  let nParts = 0, nGeo = 0, nFormed = 0, nPlanes = 0, nCut = 0, nGeoKey = 0;
+  for (const m of ms) {
+    const mm = await openModel(m); slStatus(`Omvang bepalen: ${mm.name}…`); await sleep(10);
+    const sc = await scopeOf(mm, scope, $("flip").checked); nPlanes = Math.max(nPlanes, sc.planes.length); nCut += sc.cut;
+    if (!sc.ids.length) continue;
+    slStatus(`Gegevens inlezen: ${mm.name}…`); await sleep(10);
+    const r = salesCollect(mm, sc); all.push(...r.rows); nParts += r.nParts; nGeo += r.nGeo; nFormed += r.nFormed; nGeoKey += r.nGeoKey; names.push(mm.name);
+  }
+  if (!all.length) throw new Error("Geen onderdelen gevonden in de omvang.");
+  const clean = (n) => n.replace(/\.ifc$/i, "");
+  if (names.length > 1) all.forEach((r) => { if (/^G\d+$/.test(r.pos)) r.pos = `${clean(r.src)}-${r.pos}`; });
+  const rows = mergeSalesRows(all, names.length > 1);
+  const base = names.length === 1 ? clean(names[0]) : `${names.length}_modellen`;
+  const scopeText = scope === "vis" ? (nPlanes ? `zichtbaar in de viewer, binnen ${nPlanes} doorsnedevlak(ken)` : "zichtbaar in de viewer") : "volledige zichtbare modellen";
+  const meta = { title: names.map(clean).join(" + ") + (scope === "vis" ? " (selectie)" : ""), source: names.join(", "),
+    info: [["Bron", `${names.join(", ")} - ${scopeText}`],
+      ["Gegevens", "Positie: VBSC PART_POS (anders Tekla Common/merk). Lengte, gewicht: VBSC LENGTH/WEIGHT of Tekla Quantity Length/Weight. Oppervlakte: Tekla Quantity Net surface area of VBSC AREA_NET. Materiaal uit het IFC-materiaal."],
+      ["Terugval", nGeo ? `${nGeo} onderdeel/onderdelen zonder volledige gegevens: berekend uit de geometrie (oppervlakte, volume × 7850 kg/m³, lengte langs de hoofdas).` : "Geen: alle gegevens komen uit het IFC-bestand."],
+      ["Profielgroep", "PL-profielen gesplitst in dikte en breedte en gegroepeerd per dikte, ook als ze als balk of staaf gemodelleerd zijn. Andere profielen staan als eigen profielgroep, zonder dikte/breedte."],
+      ["Ontdubbeling", nGeoKey ? `${nGeoKey} stuk(ken) zonder Tekla-positie: gelijke stukken geometrisch samengenomen (profiel, materiaal, lengte, gewicht op 0,1 kg, afmetingen op 1 mm), positie G1, G2, … Gespiegelde stukken tellen als gelijk. Zelfde telling als de kolom Mono in stap 3.` : "Alle stukken hebben een Tekla-positie of ontvouwingsnummer."],
+      ["Groepering", "Eén regel per positie; bij kleine verschillen tussen stukken van één positie staan gemiddelde waarden met een opmerking." + (names.length > 1 ? " Zelfde positie in meerdere IFC's wordt samengeteld als profiel, materiaal, lengte (±1 mm) en gewicht (±0,5 %) overeenkomen, anders apart gehouden met de IFC-naam achter de positie." : "")],
+      ["Gevormde platen", nFormed ? `${nFormed} gevormde plaat/platen: segmenten met hetzelfde VBSC "ontvouwing nummer" in dezelfde samenbouw zijn samengevoegd tot één stuk (positie = ontvouwingsnummer). Dikte, breedte en lengte komen uit "ontvouwing dikte" en "ontvouwing breedte" (uitslag volgens Tekla); gewicht = som van de segmenten; oppervlakte = som van de segmenten min de naden tussen de segmenten.` : "Geen gevormde platen (geen VBSC ontvouwingsgegevens) in deze selectie."],
+      ["Niet inbegrepen", "Bouten, deuvels en lassen."]].concat(nCut ? [["Doorsnedevlakken", `${nCut} onderdeel/onderdelen door een vlak gesneden: volledig meegeteld aan de kant van hun zwaartepunt.`]] : []) };
+  return { rows, nParts, nGeo, nFormed, meta, base, scope, names };
+}
+async function makeSalesXlsx() {
+  const btn = $("btnSlXlsx"); btn.disabled = true;
+  try {
+    const d = await salesPrepare();
+    slStatus("Excel opbouwen…");
+    if (!window.ExcelJS) await loadScript(EXCELJS_CDN);
+    const buf = await Sales.buildMeetstaat(window.ExcelJS, d.rows, d.meta);
+    download(`Salesmeetstaat_${d.base.replace(/[^\w.-]+/g, "_")}${d.scope === "vis" ? "_selectie" : ""}.xlsx`, buf, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    slStatus(`Salesmeetstaat klaar: ${d.rows.length} posities uit ${d.names.join(" + ")}${d.nFormed ? `, waarvan ${d.nFormed} gevormde plaat/platen samengevoegd uit segmenten` : ""}.${d.nGeo ? ` ${d.nGeo} stuk(ken) met gegevens uit de geometrie.` : ""}`);
+  } catch (e) { slError(errMsg(e)); slStatus(""); }
+  finally { btn.disabled = false; }
+}
+async function makeSalesPdf() {
+  const btn = $("btnSlPdf"); btn.disabled = true;
+  try {
+    const d = await salesPrepare();
+    const items = [];
+    for (let i = 0; i < d.rows.length; i++) {
+      if (i % 10 === 0) { slStatus(`Monotekeningen voorbereiden… ${i}/${d.rows.length}`); await sleep(0); }
+      const u = d.rows[i]; items.push({ row: u, geo: Sales.analyzePart(u.tris, { t: u.t, grp: u.grp, formed: u.formed }) });
+    }
+    slStatus("PDF opbouwen…"); await sleep(0);
+    if (!window.jspdf) await loadScript(JSPDF_CDN);
+    const buf = Sales.buildMonoPdf(window.jspdf.jsPDF, items, d.meta, (v, n) => fmt(v, n));
+    download(`Salesmonotek_${d.base.replace(/[^\w.-]+/g, "_")}${d.scope === "vis" ? "_selectie" : ""}.pdf`, buf, "application/pdf");
+    slStatus(`Salesmonotek klaar: ${items.length} monotekeningen op ${Math.ceil(items.length / 9)} A3-bladen.`);
+  } catch (e) { slError(errMsg(e)); slStatus(""); }
+  finally { btn.disabled = false; }
 }
 
 /* ---------- Rapport en kleuren ---------- */
@@ -586,6 +778,8 @@ async function importCalib(file) {
   $("fileImport").value = "";
 }
 
+$("btnSlXlsx").addEventListener("click", makeSalesXlsx);
+$("btnSlPdf").addEventListener("click", makeSalesPdf);
 $("btnPreview").addEventListener("click", preview);
 $("btnRun").addEventListener("click", run);
 $("btnPdf").addEventListener("click", makePdf);
